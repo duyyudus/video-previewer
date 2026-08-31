@@ -11,8 +11,8 @@ from PySide6.QtCore import QEvent, QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QWidget
 
-WIDGET_HEIGHT = 10  # total overlay height (room for the knob to protrude)
-BAR_HEIGHT = 5  # the actual track height, vertically centered
+WIDGET_HEIGHT = 20  # total overlay height (room for the knob to protrude)
+BAR_HEIGHT = 10  # the actual track height, vertically centered
 KNOB_RADIUS = 4.5
 
 _TRACK = QColor(0, 0, 0, 120)
