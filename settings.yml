@@ -56,3 +56,6 @@ max_cols: 10
 autoplay_delay_ms: 200
 # Minimum gap between seeks, in ms (~30 seeks/second maximum).
 seek_throttle_ms: 33
+# Double-click-to-open: maximum pointer drift between the two presses, in
+# pixels. The timing window is the OS double-click interval.
+double_click_max_dist: 10

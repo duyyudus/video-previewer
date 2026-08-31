@@ -56,6 +56,9 @@ DEFAULTS: dict[str, Any] = {
     # gap between seeks (ms, ~30 seeks/second maximum).
     "autoplay_delay_ms": 200,
     "seek_throttle_ms": 33,
+    # Double-click-to-open: maximum pointer drift between the two presses
+    # (px, Manhattan length). The timing window comes from the OS.
+    "double_click_max_dist": 10,
 }
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -80,6 +83,7 @@ MIN_COLS: int
 MAX_COLS: int
 AUTOPLAY_DELAY_MS: int
 SEEK_THROTTLE_MS: int
+DOUBLE_CLICK_MAX_DIST: int
 
 
 def settings_path() -> Path:
@@ -167,7 +171,7 @@ def load_settings() -> None:
     global THUMB_FALLBACK_SECONDS, THUMB_EXTRACT_TIMEOUT, PROBE_TIMEOUT
     global THUMB_CONCURRENCY, SCAN_BATCH, CELL_WIDTH, CELL_ASPECT
     global FILENAME_ROW, GRID_SPACING, MIN_COLS, MAX_COLS
-    global AUTOPLAY_DELAY_MS, SEEK_THROTTLE_MS
+    global AUTOPLAY_DELAY_MS, SEEK_THROTTLE_MS, DOUBLE_CLICK_MAX_DIST
 
     _settings_data.clear()
     _settings_data.update(_read_settings_file())
@@ -188,6 +192,7 @@ def load_settings() -> None:
     MAX_COLS = _num("max_cols", int)
     AUTOPLAY_DELAY_MS = _num("autoplay_delay_ms", int)
     SEEK_THROTTLE_MS = _num("seek_throttle_ms", int)
+    DOUBLE_CLICK_MAX_DIST = _num("double_click_max_dist", int)
 
 
 load_settings()
