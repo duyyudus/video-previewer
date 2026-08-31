@@ -23,6 +23,10 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 from video_previewer import app as app_mod  # noqa: E402
 from video_previewer.ui.main_window import MainWindow  # noqa: E402
 from video_previewer import config  # noqa: E402
+from video_previewer.ui import exit_dialog  # noqa: E402
+
+# Headless run: never block on the keep/discard prompt in closeEvent.
+exit_dialog.ask_keep_on_exit = lambda parent, folder, video_count: False
 
 
 def make_video(path: Path, seconds: int, hue: int) -> None:

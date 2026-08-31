@@ -27,16 +27,19 @@ uv run python scripts/render_check.py   # offscreen smoke check; writes
   skips may mean ffmpeg is not installed.
 - Overrides: `VIDEO_PREVIEWER_FFMPEG`, `VIDEO_PREVIEWER_FFPROBE` (binary
   locations), `VIDEO_PREVIEWER_CACHE_DIR` (per-user cache directory; the
-  `cache_dir` test fixture sets this).
+  `cache_dir` test fixture sets this), `VIDEO_PREVIEWER_SETTINGS` (settings
+  file location; defaults to `settings.yml` in the project root).
 
 ## Repository layout
 
 ```
+settings.yml           # user-adjustable tunables (loaded by config.py)
 src/video_previewer/
 ├── main.py            # entry point: logging setup, C-stderr redirect to
 │                      #   <cache_dir>/console.log, QT_LOGGING_RULES
 ├── app.py             # QApplication bootstrap, dark palette, run()
-├── config.py          # ALL tunable constants + path/env helpers
+├── config.py          # settings.yml loader + built-in defaults +
+│                      #   path/env helpers
 ├── ui/
 │   ├── main_window.py # MainWindow: folder selection, state, exit dialog
 │   ├── video_grid.py  # VideoGrid (QListView) + responsive column layout
@@ -93,9 +96,12 @@ scripts/render_check.py
 
 - `from __future__ import annotations` in every module; full type hints;
   `@dataclass(slots=True)` for data types.
-- **Tunables live in `config.py`** — thumbnail geometry/timeout/concurrency,
-  scan batch size, grid metrics, autoplay delay, seek throttle. Do not scatter
-  magic numbers into feature code.
+- **Tunables live in `settings.yml`** (project root) — thumbnail
+  geometry/timeout/concurrency, scan batch size, grid metrics, autoplay
+  delay, seek throttle, supported extensions. `config.py` loads them with
+  built-in defaults (fail soft) and re-exports them as module constants;
+  feature code keeps reading `config.X`. Do not scatter magic numbers into
+  feature code.
 - Concurrency: Qt-native only (`QThreadPool`, `QRunnable`, signals/slots).
   Do **not** introduce asyncio.
 - The shared SQLite connection is created with `check_same_thread=False` and

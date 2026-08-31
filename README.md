@@ -49,9 +49,14 @@ Then click **Open Folder…** and pick a folder with videos.
 
 ## Usage notes
 
-* Supported formats: `.mp4 .mkv .mov .webm .avi .m4v`.
+* Supported formats: `.mp4 .mkv .mov .webm .avi .m4v` (configurable in
+  `settings.yml`).
 * The **Subfolders** checkbox toggles recursive scanning (remembered).
 * The last opened folder is restored on next launch.
+* Tunables (thumbnail size, grid metrics, timeouts, concurrency, autoplay
+  delay, seek throttle, supported extensions) live in `settings.yml` in the
+  project root; restart the app after editing. Point
+  `VIDEO_PREVIEWER_SETTINGS` at another file to override its location.
 * Thumbnails/metadata are cached per user:
   * Windows: `%LOCALAPPDATA%\video-previewer\`
   * macOS: `~/Library/Caches/video-previewer/`
@@ -72,10 +77,11 @@ skipped automatically when ffmpeg is unavailable.
 ## Layout
 
 ```
+settings.yml           # tunables (thumbnail, grid, playback, extensions)
 src/video_previewer/
 ├── main.py            # entry point
 ├── app.py             # QApplication setup, dark palette
-├── config.py          # constants + paths
+├── config.py          # settings.yml loader + defaults + paths
 ├── ui/                # main window, grid view, item delegate
 ├── models/            # VideoItem, QAbstractListModel
 ├── media/             # ffprobe metadata, ffmpeg thumbnailer, shared player

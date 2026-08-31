@@ -1,0 +1,58 @@
+# video-previewer settings
+#
+# Every key is optional: omit a key (or the whole file) and the built-in
+# default is used. A missing file or a malformed entry never breaks the app —
+# invalid values are skipped and the default is logged as a warning.
+#
+# Location: this file, in the project root. Point VIDEO_PREVIEWER_SETTINGS
+# at another .yml file to override the location.
+#
+# Restart the app after editing.
+
+# --- Supported files --------------------------------------------------------
+# Video file extensions (lowercase, dot included; "MP4" is normalised to ".mp4").
+supported_extensions:
+  - .mp4
+  - .mkv
+  - .mov
+  - .webm
+  - .avi
+  - .m4v
+
+# --- Thumbnails ---------------------------------------------------------------
+# Width in pixels of generated thumbnails (height follows the video aspect).
+thumb_width: 320
+# Where to extract the frame, as a fraction of the duration (0.15 = 15%;
+# frame zero is often a black frame or title card).
+thumb_position_ratio: 0.15
+# Fallback position in seconds when the video duration is unknown/very short.
+thumb_fallback_seconds: 1.0
+# Timeout per ffmpeg thumbnail extraction, in seconds.
+thumb_extract_timeout: 60
+# Timeout per ffprobe metadata probe, in seconds.
+probe_timeout: 10
+# Maximum number of parallel thumbnail jobs.
+thumb_concurrency: 4
+
+# --- Folder scanning ------------------------------------------------------------
+# Items emitted per scanner batch.
+scan_batch: 64
+
+# --- Grid layout ------------------------------------------------------------------
+# Preferred tile width in pixels.
+cell_width: 220
+# Tile aspect ratio, width / height (9/16 = 0.5625).
+cell_aspect: 0.5625
+# Pixels reserved for the filename row below the thumbnail.
+filename_row: 24
+# Spacing between tiles, in pixels.
+grid_spacing: 8
+# Minimum and maximum number of columns.
+min_cols: 2
+max_cols: 10
+
+# --- Hover preview playback ---------------------------------------------------------
+# Grace period before a hover starts playback, in ms.
+autoplay_delay_ms: 200
+# Minimum gap between seeks, in ms (~30 seeks/second maximum).
+seek_throttle_ms: 33
