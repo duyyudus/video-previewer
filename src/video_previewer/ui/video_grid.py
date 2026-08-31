@@ -54,12 +54,23 @@ class VideoGrid(QListView):
     def _apply_grid_size(self, viewport_width: int) -> None:
         if viewport_width <= 0:
             return
+        # QListView IconMode tiles cells back-to-back (setSpacing is ignored
+        # with an explicit grid size), so the gutter is part of the cell
+        # pitch: the delegate draws the card inset by GRID_SPACING on the
+        # right and bottom, which yields the visible gutter.
         cols = max(
             config.MIN_COLS,
-            min(config.MAX_COLS, viewport_width // config.CELL_WIDTH),
+            min(
+                config.MAX_COLS,
+                viewport_width // (config.CELL_WIDTH + config.GRID_SPACING),
+            ),
         )
-        w = max(80, (viewport_width - config.GRID_SPACING * (cols + 1)) // cols)
-        self.setGridSize(QSize(w, cell_height(w)))
+        pitch = max(
+            config.GRID_SPACING + 80,
+            (viewport_width - 2 * config.GRID_SPACING) // cols,
+        )
+        w = pitch - config.GRID_SPACING
+        self.setGridSize(QSize(pitch, cell_height(w) + config.GRID_SPACING))
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
@@ -101,7 +112,11 @@ class VideoGrid(QListView):
                 self._player.leave()
 
     def _cell_rect(self, row: int) -> QRect:
-        return self.visualRect(self._model.index(row)).adjusted(0, 0, -1, -1)
+        # Card rect without the gutter: the preview video + seek bar align
+        # with the painted card, not the full cell pitch.
+        return self.visualRect(self._model.index(row)).adjusted(
+            0, 0, -config.GRID_SPACING, -config.GRID_SPACING
+        )
 
     @staticmethod
     def _fraction_at(pos: QPoint, cell: QRect) -> float:

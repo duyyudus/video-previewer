@@ -40,7 +40,11 @@ class VideoDelegate(QStyledItemDelegate):
     # -- painting ---------------------------------------------------------------
 
     def paint(self, painter: QPainter, option, index) -> None:
-        item_rect = QRect(option.rect)
+        # The cell pitch includes the grid gutter (IconMode ignores
+        # setSpacing); draw the card inset so the gutter stays visible.
+        item_rect = QRect(option.rect).adjusted(
+            0, 0, -config.GRID_SPACING, -config.GRID_SPACING
+        )
         img_rect = QRect(
             item_rect.left(),
             item_rect.top(),
