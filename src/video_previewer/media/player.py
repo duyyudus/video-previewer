@@ -8,6 +8,8 @@ throttled (a single pending seek flushed at most ~30x/s).
 
 from __future__ import annotations
 
+import logging
+
 from PySide6.QtCore import QObject, QRect, QUrl, QTimer
 from PySide6.QtGui import Qt
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
@@ -16,6 +18,8 @@ from PySide6.QtWidgets import QWidget
 
 from .. import config
 from .seek_bar import SeekBarOverlay
+
+log = logging.getLogger(__name__)
 
 
 def seek_ms(fraction: float, duration_ms: int) -> int:
@@ -184,8 +188,13 @@ class PreviewPlayer(QObject):
 
     def _on_error(self, error: QMediaPlayer.Error, message: str) -> None:
         # Never crash the app on a bad file: fall back to the static thumbnail.
+        # (The Qt FFmpeg category is filtered to warning+ in the console, so
+        # surface player-level errors through the Python logger.)
+        path = self._path
         self._path = None
         self._stop_playback()
+        if path:
+            log.warning("preview playback error (%s) for %s: %s", error, path, message)
 
     # -- test/inspection helpers ----------------------------------------------
 

@@ -3,14 +3,70 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 
-from .app import run
+# Qt reads this exactly once at startup (C++ side, full rule grammar):
+# silence the FFmpeg backend's Qt-side info/debug chatter, keep warnings
+# and criticals. Must be set before any PySide6 import.
+os.environ.setdefault(
+    "QT_LOGGING_RULES",
+    "qt.multimedia.ffmpeg=false;"
+    "qt.multimedia.ffmpeg.warning=true;"
+    "qt.multimedia.ffmpeg.critical=true",
+)
+
+from . import config  # noqa: E402
+from .app import run  # noqa: E402
+
+
+def _redirect_c_stderr() -> None:
+    """Point C-level stderr (fd 2) at ``<cache_dir>/console.log``.
+
+    The FFmpeg library statically linked into Qt writes its demuxer/decoder
+    banners ("Input #0, ...") directly to the C runtime's stderr, bypassing
+    Qt's logging system and any category filters. Redirecting fd 2 keeps the
+    user's console clean while preserving that output (and any native crash
+    text) in a log file. Python's own logging is pointed at stdout by
+    ``main()``, so app log lines stay visible in the console.
+
+    Failures here never break startup: the original stderr is kept.
+    """
+    try:
+        log_path = config.app_cache_dir() / "console.log"
+        if os.name == "nt":
+            import ctypes
+            import msvcrt
+
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.touch(exist_ok=True)
+            k32 = ctypes.windll.kernel32
+            handle = k32.CreateFileW(
+                str(log_path),
+                0x40000000,  # GENERIC_WRITE
+                0x3,  # FILE_SHARE_READ | FILE_SHARE_WRITE
+                None,
+                3,  # OPEN_EXISTING
+                0x02000000,  # FILE_FLAG_BACKUP_SEMANTICS
+                None,
+            )
+            if handle in (-1, ctypes.c_void_p(-1).value):
+                return
+            fd = msvcrt.open_osfhandle(handle, os.O_APPEND | os.O_WRONLY)
+            os.dup2(fd, 2)
+        elif os.name == "posix":
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_file = open(log_path, "ab", buffering=0)
+            os.dup2(log_file.fileno(), 2)
+    except Exception:  # noqa: BLE001 - never break startup over logging setup
+        pass
 
 
 def main() -> None:
+    _redirect_c_stderr()
     logging.basicConfig(
         level=logging.INFO,
+        stream=sys.stdout,  # stderr may be redirected to the log file
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     sys.exit(run())

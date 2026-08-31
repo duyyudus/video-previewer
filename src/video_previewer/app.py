@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 
 from PySide6.QtGui import QPalette, QColor
-from PySide6.QtCore import QLoggingCategory, Qt
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from . import config
@@ -41,9 +41,6 @@ def run() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("video-previewer")
     app.setOrganizationName(config.ORG_NAME)
-    # The Qt FFmpeg backend logs every opened file at info level; keep only
-    # warnings so the console stays quiet while previews are played.
-    QLoggingCategory.setFilterRules("qt.multimedia.ffmpeg.warning=true")
     _apply_dark_palette(app)
     window = MainWindow()
     window.show()
