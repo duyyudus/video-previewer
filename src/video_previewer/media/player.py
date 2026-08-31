@@ -15,6 +15,7 @@ from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import QWidget
 
 from .. import config
+from .seek_bar import SeekBarOverlay
 
 
 def seek_ms(fraction: float, duration_ms: int) -> int:
@@ -41,12 +42,17 @@ class PreviewPlayer(QObject):
         self._video.setAttribute(Qt.WA_TransparentForMouseEvents)
         self._video.hide()
 
+        # Timeline overlay pinned to the bottom edge of the video.
+        self._seekbar = SeekBarOverlay(self._video)
+        self._seekbar.hide()
+
         self._player.setAudioOutput(self._audio)
         self._player.setVideoOutput(self._video)
         self._player.setLoops(0)  # loop while the pointer stays on the tile
         self._player.errorOccurred.connect(self._on_error)
         self._player.mediaStatusChanged.connect(self._on_media_status)
         self._player.durationChanged.connect(self._on_duration_changed)
+        self._player.positionChanged.connect(self._on_position_changed)
 
         # Autoplay delay: avoids decoder churn when the pointer sweeps the grid.
         self._autoplay = QTimer(self)
@@ -79,6 +85,7 @@ class PreviewPlayer(QObject):
             return
         self._stop_playback()
         self._path = path
+        self._seekbar.set_progress(0.0)
         if self._video.isVisible():
             self._video.setGeometry(rect)
         self._autoplay.start()
@@ -108,9 +115,13 @@ class PreviewPlayer(QObject):
         duration = self._player.duration()
         if duration <= 0:
             self._pending_fraction = max(0.0, min(1.0, fraction))
+            self._seekbar.set_progress(self._pending_fraction)
             return
         ms = seek_ms(fraction, duration)
         self._pending_seek_ms = ms
+        # Immediate visual feedback; positionChanged takes over once the
+        # decoder actually lands at the new position.
+        self._seekbar.set_progress(max(0.0, min(1.0, fraction)))
         if not self._seek.isActive():
             self._seek.start()
 
@@ -126,6 +137,7 @@ class PreviewPlayer(QObject):
         self._seek.stop()
         self._pending_seek_ms = None
         self._player.stop()
+        self._seekbar.hide()
         self._video.hide()
 
     def _apply_seek(self) -> None:
@@ -155,6 +167,20 @@ class PreviewPlayer(QObject):
             if self._path is not None and self._rect is not None and not self._video.isVisible():
                 self._video.setGeometry(self._rect)
                 self._video.show()
+                self._seekbar.show()
+
+    def _on_position_changed(self, position: int, duration: int | None = None) -> None:
+        """Follow the real playback position in the timeline overlay.
+
+        (The signal passes only *position*; *duration* is an optional
+        override used by tests.)
+        """
+        if self._path is None:
+            return
+        duration = duration if duration is not None else self._player.duration()
+        if duration <= 0:
+            return
+        self._seekbar.set_progress(position / duration)
 
     def _on_error(self, error: QMediaPlayer.Error, message: str) -> None:
         # Never crash the app on a bad file: fall back to the static thumbnail.
@@ -170,3 +196,7 @@ class PreviewPlayer(QObject):
     @property
     def video_widget(self) -> QVideoWidget:
         return self._video
+
+    @property
+    def seekbar(self) -> SeekBarOverlay:
+        return self._seekbar

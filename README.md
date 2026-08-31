@@ -26,7 +26,9 @@ low on resources.
   stops it and restores the static thumbnail.
 * **Scrubbing** — horizontal pointer position maps to a video timestamp
   (`x / width × duration`) and is applied as a throttled `setPosition`
-  (max ~30 seeks/second).
+  (max ~30 seeks/second). A thin timeline bar with a knob (bottom of the
+  hovered tile) mirrors the pointer while you scrub and the real playback
+  position while the preview loops.
 
 ## Requirements
 
