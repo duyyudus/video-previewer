@@ -6,7 +6,7 @@ from PySide6.QtCore import QRect
 from PySide6.QtWidgets import QWidget
 
 from video_previewer.media.player import PreviewPlayer
-from video_previewer.media.seek_bar import SeekBarOverlay
+from video_previewer.media.seek_bar import WIDGET_HEIGHT, SeekBarOverlay
 
 
 def test_progress_clamped(qapp):
@@ -29,13 +29,13 @@ def test_paint_fill_track_knob(qapp):
     host.resize(300, 200)
     host.show()
     bar = SeekBarOverlay(host)
-    bar.setGeometry(0, 190, 300, 10)
+    bar.setGeometry(0, 200 - WIDGET_HEIGHT, 300, WIDGET_HEIGHT)
     bar.show()
     bar.set_progress(0.5)
     qapp.processEvents()
 
     img = bar.grab().toImage()
-    assert img.width() == 300 and img.height() == 10
+    assert img.width() == 300 and img.height() == WIDGET_HEIGHT
 
     def rgba(x: int, y: int) -> tuple[int, int, int, int]:
         raw = img.pixel(x, y)
@@ -50,20 +50,24 @@ def test_paint_fill_track_knob(qapp):
             a,
         )
 
+    # The track (BAR_HEIGHT) is vertically centered in the taller widget, so
+    # probe its center row, away from the antialiased edges.
+    mid = WIDGET_HEIGHT // 2
+
     # Background outside the bar is unpainted (transparent)
     r, g, b, a = rgba(290, 0)
     assert a == 0
 
     # Left of center: bright near-opaque fill
-    r, g, b, a = rgba(10, 5)
+    r, g, b, a = rgba(10, mid)
     assert a > 200 and r > 200 and g > 200
 
     # Right of center: dark translucent track
-    r, g, b, a = rgba(290, 5)
+    r, g, b, a = rgba(290, mid)
     assert 60 < a < 200 and r < 20
 
     # Knob at center: opaque white
-    r, g, b, a = rgba(150, 5)
+    r, g, b, a = rgba(150, mid)
     assert a > 250 and r > 240 and g > 240 and b > 240
     host.deleteLater()
 

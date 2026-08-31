@@ -10,6 +10,20 @@ from pathlib import Path
 # Must be set before QApplication is constructed anywhere.
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+if os.name == "nt":
+    # The DSH file sandbox (active when tests run inside a DSH session)
+    # makes directories created with an explicit ``mode`` argument
+    # inaccessible afterwards (scandir/rmdir are denied), which breaks
+    # pytest's tmpdir plugin: it creates its basetemp via
+    # ``Path.mkdir(mode=0o700)``. ``mode`` is ignored by plain Windows
+    # ``mkdir`` anyway, so drop it here so pytest's temp dirs stay usable.
+    _real_mkdir = os.mkdir
+
+    def _mkdir_ignore_mode(name, mode=0o777):
+        return _real_mkdir(name)
+
+    os.mkdir = _mkdir_ignore_mode
+
 import pytest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
@@ -39,6 +53,22 @@ def _clean_settings(qapp):
     s.remove(config.SETTING_RECURSIVE)
     yield
     s.sync()
+
+
+@pytest.fixture(autouse=True)
+def _no_exit_prompt(monkeypatch):
+    """closeEvent must never block on the keep/discard dialog in tests.
+
+    Answers with the UI default (unchecked = discard). Tests that exercise
+    the "keep" outcome re-stub ``exit_dialog.ask_keep_on_exit`` themselves.
+    """
+    from video_previewer.ui import exit_dialog
+
+    monkeypatch.setattr(
+        exit_dialog,
+        "ask_keep_on_exit",
+        lambda parent, folder, video_count: False,
+    )
 
 
 @pytest.fixture

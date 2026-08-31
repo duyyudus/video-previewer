@@ -73,6 +73,42 @@ def test_purge_removes_deleted_and_changed(db, cache_dir, tmp_path):
     assert cache.thumbnail_path_for(items["kept"].vid).exists() is True
 
 
+def test_delete_scans_for_folder(db, tmp_path):
+    folder = tmp_path / "vids"
+    for rec in (False, True):
+        db.save_scan(db.scan_key(folder, rec), [{"path": "/v/a.mp4", "size": 1, "mtime": 1.0}])
+    other = tmp_path / "other"
+    db.save_scan(db.scan_key(other, False), [{"path": "/o/b.mp4", "size": 1, "mtime": 1.0}])
+
+    removed = db.delete_scans_for_folder(folder)
+    assert removed == 2
+    assert db.load_scan(db.scan_key(folder, False)) is None
+    assert db.load_scan(db.scan_key(folder, True)) is None
+    # other folders' scan caches are untouched
+    assert db.load_scan(db.scan_key(other, False)) is not None
+
+
+def test_purge_folder_all_removes_everything(db, cache_dir, tmp_path):
+    cache = ThumbnailCache(db)
+    folder = tmp_path / "vids"
+    folder.mkdir()
+    items = [VideoItem(folder / f"{name}.mp4", 10, 1.0) for name in ("a", "b")]
+    for item in items:
+        thumb = cache.thumbnail_path_for(item.vid)
+        thumb.parent.mkdir(parents=True, exist_ok=True)
+        thumb.write_bytes(b"jpeg")
+        cache.store(item, thumb, 1000, 320, 180, "h264")
+    db.save_scan(db.scan_key(folder, False), [{"path": items[0].path.as_posix(), "size": 10, "mtime": 1.0}])
+
+    removed = cache.purge_folder_all(folder)
+    assert removed == 2
+    for item in items:
+        assert db.get_video(item.vid) is None
+        assert cache.thumbnail_path_for(item.vid).exists() is False
+    assert db.load_scan(db.scan_key(folder, False)) is None
+    assert db.load_scan(db.scan_key(folder, True)) is None
+
+
 def test_hydrate_uses_cache(db, cache_dir):
     cache = ThumbnailCache(db)
     item = VideoItem(Path("/v/h.mp4"), 10, 1.0)

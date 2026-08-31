@@ -30,6 +30,7 @@ from ..cache.database import Database
 from ..media.player import PreviewPlayer
 from ..models.video_item import VideoItem
 from ..models.video_model import VideoModel
+from ..ui import exit_dialog
 from ..ui.video_grid import VideoGrid
 from ..workers.scanner import ScanResult, ScanSignals, Scanner
 from ..workers.thumbnail_worker import ThumbnailQueue
@@ -199,6 +200,11 @@ class MainWindow(QMainWindow):
     # -- shutdown ------------------------------------------------------------------------
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        folder = self._current_folder
+        # Ask before draining so the user is not kept waiting for workers.
+        keep = folder is None or exit_dialog.ask_keep_on_exit(
+            self, folder, self._model.count()
+        )
         self._player.leave()
         # Let in-flight worker jobs (probing/thumbnailing) drain so they do
         # not race the database close. Bounded so closing stays snappy; the
@@ -207,8 +213,30 @@ class MainWindow(QMainWindow):
         while self._thumbs.pending_count() > 0 and time.time() < deadline:
             QCoreApplication.processEvents()
             time.sleep(0.02)
+        # Resolve the keep/discard decision after the drain: no workers are
+        # still writing cache rows when we purge.
+        if folder is not None:
+            if keep:
+                # Re-assert + sync so the choice is on disk, not just in this
+                # QSettings instance's buffer.
+                self._settings.setValue(config.SETTING_LAST_FOLDER, str(folder))
+                self._settings.setValue(
+                    config.SETTING_RECURSIVE, self._recursive_chk.isChecked()
+                )
+                self._settings.sync()
+            else:
+                self._forget_folder(folder)
         self._db.close()
         super().closeEvent(event)
+
+    def _forget_folder(self, folder: Path) -> None:
+        """Discard the selected folder: forget the setting + drop its cache."""
+        self._settings.remove(config.SETTING_LAST_FOLDER)
+        self._settings.remove(config.SETTING_RECURSIVE)
+        self._settings.sync()
+        removed = self._cache.purge_folder_all(folder)
+        if removed:
+            log.info("discarded %d cached video(s) for %s", removed, folder)
 
     # -- test helpers ----------------------------------------------------------------------
 

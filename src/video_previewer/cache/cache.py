@@ -97,3 +97,22 @@ class ThumbnailCache:
             except OSError:
                 log.debug("could not remove stale thumbnail %s", t)
         return len(stale)
+
+    def purge_folder_all(self, folder: Path) -> int:
+        """Drop every cached video and scan entry for *folder*.
+
+        Used when the user discards the folder on exit. Returns the number
+        of video rows removed (their thumbnail files are unlinked too).
+        """
+        rows = self._db.videos_under(folder.absolute().as_posix())
+        vids = [r.vid for r in rows]
+        if vids:
+            for t in self._db.delete_videos(vids):
+                try:
+                    p = Path(t)
+                    if p.exists():
+                        p.unlink()
+                except OSError:
+                    log.debug("could not remove thumbnail %s", t)
+        self._db.delete_scans_for_folder(folder)
+        return len(vids)

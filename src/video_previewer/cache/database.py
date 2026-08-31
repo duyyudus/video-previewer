@@ -196,6 +196,15 @@ class Database:
         except ValueError:
             return None
 
+    def delete_scans_for_folder(self, folder: Path) -> int:
+        """Delete cached scan results for *folder* (flat + recursive keys)."""
+        self._guard()
+        keys = (self.scan_key(folder, False), self.scan_key(folder, True))
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM scans WHERE key IN (?, ?)", keys)
+            self._conn.commit()
+        return cur.rowcount
+
     def save_scan(self, key: str, entries: list[dict[str, Any]]) -> None:
         self._guard()
         with self._lock:
