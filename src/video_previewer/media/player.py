@@ -75,6 +75,16 @@ class PreviewPlayer(QObject):
         self._pending_seek_ms: int | None = None
         self._pending_fraction: float | None = None
 
+        # Media generation: incremented whenever the hovered path changes (and
+        # on leave). ``_source_gen`` records which generation the player's
+        # *current* source belongs to (set in ``_start_playback``). Stale
+        # media-status / duration / seek signals from a previous source are
+        # dropped while ``_source_gen != _media_gen``, so a slow decoder from
+        # the last tile can never pop the video widget over the new tile or
+        # seek against a stale duration.
+        self._media_gen = 0
+        self._source_gen = -1
+
     # -- hover API (called from the main thread) ----------------------------
 
     def enter(self, path: str, rect: QRect) -> None:
@@ -89,6 +99,7 @@ class PreviewPlayer(QObject):
             return
         self._stop_playback()
         self._path = path
+        self._media_gen += 1  # invalidate any in-flight signals from the old source
         self._seekbar.set_progress(0.0)
         if self._video.isVisible():
             self._video.setGeometry(rect)
@@ -100,6 +111,7 @@ class PreviewPlayer(QObject):
         self._pending_seek_ms = None
         self._pending_fraction = None
         self._path = None
+        self._media_gen += 1  # stale source signals must not resurrect the widget
         self._stop_playback()
 
     def reposition(self, rect: QRect) -> None:
@@ -115,6 +127,13 @@ class PreviewPlayer(QObject):
         fraction is remembered and applied once the duration arrives.
         """
         if self._path is None:
+            return
+        if self._source_gen != self._media_gen:
+            # Autoplay not fired yet (or the source is the previous tile's);
+            # the player's duration is stale. Remember the fraction so it is
+            # applied once the new source's duration arrives.
+            self._pending_fraction = max(0.0, min(1.0, fraction))
+            self._seekbar.set_progress(self._pending_fraction)
             return
         duration = self._player.duration()
         if duration <= 0:
@@ -135,6 +154,7 @@ class PreviewPlayer(QObject):
         if self._path is None:
             return
         self._player.setSource(QUrl.fromLocalFile(self._path))
+        self._source_gen = self._media_gen  # signals now belong to this media
         self._player.play()
 
     def _stop_playback(self) -> None:
@@ -147,12 +167,16 @@ class PreviewPlayer(QObject):
     def _apply_seek(self) -> None:
         ms = self._pending_seek_ms
         self._pending_seek_ms = None
+        if self._source_gen != self._media_gen:
+            return  # media changed since the scrub; drop the seek
         if ms is None or self._player.duration() <= 0:
             return
         self._player.setPosition(ms)
 
     def _on_duration_changed(self, duration: int) -> None:
         # A scrub happened while the decoder was warming up: land it now.
+        if self._source_gen != self._media_gen:
+            return  # stale source; its duration is not the current media's
         if duration <= 0:
             return
         if self._pending_fraction is not None:
@@ -164,6 +188,8 @@ class PreviewPlayer(QObject):
     def _on_media_status(self, status: QMediaPlayer.MediaStatus) -> None:
         # Show the (blank until first frame) video widget only once media is
         # loaded, so the static thumbnail stays visible while the decoder warms up.
+        if self._source_gen != self._media_gen:
+            return  # a previous source's status; ignore it
         if status in (
             QMediaPlayer.MediaStatus.LoadedMedia,
             QMediaPlayer.MediaStatus.BufferedMedia,
@@ -190,6 +216,8 @@ class PreviewPlayer(QObject):
         # Never crash the app on a bad file: fall back to the static thumbnail.
         # (The Qt FFmpeg category is filtered to warning+ in the console, so
         # surface player-level errors through the Python logger.)
+        if self._source_gen != self._media_gen:
+            return  # a stale source errored; don't tear down the new preview
         path = self._path
         self._path = None
         self._stop_playback()

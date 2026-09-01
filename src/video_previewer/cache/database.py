@@ -12,6 +12,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..models.video_item import normalize_path
+
+# SQLite binds at most SQLITE_MAX_VARIABLE_NUMBER parameters per statement
+# (999 on older builds, 32766 on modern ones). Chunk large vid lists so a
+# 10k+ folder purge never exceeds the limit.
+_DELETE_CHUNK = 500
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS videos (
     vid         TEXT PRIMARY KEY,
@@ -137,23 +144,43 @@ class Database:
         self._guard()
         if not vids:
             return []
-        qmark = ",".join("?" for _ in vids)
+        thumbs: list[str] = []
         with self._lock:
-            rows = self._conn.execute(
-                f"SELECT thumbnail FROM videos WHERE vid IN ({qmark})", vids
-            ).fetchall()
-            self._conn.execute(f"DELETE FROM videos WHERE vid IN ({qmark})", vids)
+            for i in range(0, len(vids), _DELETE_CHUNK):
+                chunk = vids[i : i + _DELETE_CHUNK]
+                qmark = ",".join("?" for _ in chunk)
+                rows = self._conn.execute(
+                    f"SELECT thumbnail FROM videos WHERE vid IN ({qmark})", chunk
+                ).fetchall()
+                self._conn.execute(
+                    f"DELETE FROM videos WHERE vid IN ({qmark})", chunk
+                )
+                thumbs.extend(r["thumbnail"] for r in rows)
             self._conn.commit()
-        return [r["thumbnail"] for r in rows]
+        return thumbs
 
     def videos_under(self, folder_prefix: str) -> list[VideoRow]:
-        """All rows whose stored path is under *folder_prefix* (inclusive)."""
+        """All rows whose stored path is under *folder_prefix* (inclusive).
+
+        Filtered in Python (not ``LIKE``): SQLite ``LIKE`` is case-insensitive
+        for ASCII and treats ``_``/``%`` as wildcards, which would let a
+        ``purge_folder`` silently match and delete a *different* folder's rows
+        (e.g. ``C:/videos/season_1`` matching ``C:/videos/seasonX1``). The
+        Python-side comparison reuses ``normalize_path`` so case handling
+        matches the rest of the cache (case-insensitive on Windows,
+        case-sensitive elsewhere) and bounds the match to a real subpath.
+        """
         self._guard()
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT * FROM videos WHERE path LIKE ?", (folder_prefix + "%",)
-            ).fetchall()
-        return [self._to_row(r) for r in rows]
+            rows = self._conn.execute("SELECT * FROM videos").fetchall()
+        folder = normalize_path(Path(folder_prefix)).rstrip("/")
+        prefix = folder + "/"
+        result: list[VideoRow] = []
+        for r in rows:
+            p = normalize_path(Path(r["path"]))
+            if p == folder or p.startswith(prefix):
+                result.append(self._to_row(r))
+        return result
 
     @staticmethod
     def _to_row(row: sqlite3.Row | None) -> VideoRow | None:

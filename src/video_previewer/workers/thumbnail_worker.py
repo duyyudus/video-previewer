@@ -43,47 +43,55 @@ class _ThumbJob(QRunnable):
     def run(self) -> None:
         item = self._item
         vid = item.vid
-        thumb_path = self._cache.thumbnail_path_for(vid)
+        try:
+            thumb_path = self._cache.thumbnail_path_for(vid)
 
-        # 1) Cache hit: metadata + thumbnail already on disk.
-        row = self._db.get_video(vid)
-        if row is not None and Path(row.thumbnail) == thumb_path and thumb_path.exists():
-            updated = item.with_metadata(
-                row.duration_ms, row.width, row.height, row.vcodec
-            ).with_thumbnail(thumb_path)
-            self._signals.ready.emit(updated)
+            # 1) Cache hit: metadata + thumbnail already on disk.
+            row = self._db.get_video(vid)
+            if row is not None and Path(row.thumbnail) == thumb_path and thumb_path.exists():
+                updated = item.with_metadata(
+                    row.duration_ms, row.width, row.height, row.vcodec
+                ).with_thumbnail(thumb_path)
+                self._signals.ready.emit(updated)
+                return
+
+            # 2) Probe + extract.
+            probe = metadata.probe_video(item.path)
+            ok = thumbnailer.extract_thumbnail(item.path, thumb_path,
+                                               probe.duration_ms if probe else None)
+            if not ok:
+                self._signals.failed.emit(str(item.path))
+            else:
+                try:
+                    self._cache.store(
+                        item,
+                        thumb_path,
+                        probe.duration_ms if probe else None,
+                        probe.width if probe else None,
+                        probe.height if probe else None,
+                        probe.vcodec if probe else None,
+                    )
+                except sqlite3.ProgrammingError:
+                    # App is shutting down (DB closed). The thumbnail file
+                    # itself was written; the DB row is re-created on the next
+                    # request.
+                    pass
+                updated = (
+                    item.with_metadata(
+                        probe.duration_ms, probe.width, probe.height, probe.vcodec
+                    )
+                    if probe
+                    else item
+                ).with_thumbnail(thumb_path)
+                self._signals.ready.emit(updated)
+        except Exception:  # noqa: BLE001 - fail soft (rule 8)
+            # A bad file or a closed DB must never crash the app nor leak the
+            # concurrency slot. Log and fall back to the static thumbnail.
+            log.exception("thumbnail job failed for %s", item.path)
+        finally:
+            # Always return the slot so the queue keeps pumping, even when a
+            # job dies early (otherwise _inflight leaks and shutdown stalls).
             self._signals.job_done.emit(vid)
-            return
-
-        # 2) Probe + extract.
-        probe = metadata.probe_video(item.path)
-        ok = thumbnailer.extract_thumbnail(item.path, thumb_path,
-                                           probe.duration_ms if probe else None)
-        if not ok:
-            self._signals.failed.emit(str(item.path))
-        else:
-            try:
-                self._cache.store(
-                    item,
-                    thumb_path,
-                    probe.duration_ms if probe else None,
-                    probe.width if probe else None,
-                    probe.height if probe else None,
-                    probe.vcodec if probe else None,
-                )
-            except sqlite3.ProgrammingError:
-                # App is shutting down (DB closed). The thumbnail file itself
-                # was written; the DB row is re-created on the next request.
-                pass
-            updated = (
-                item.with_metadata(
-                    probe.duration_ms, probe.width, probe.height, probe.vcodec
-                )
-                if probe
-                else item
-            ).with_thumbnail(thumb_path)
-            self._signals.ready.emit(updated)
-        self._signals.job_done.emit(vid)
 
 
 class ThumbnailQueue(QObject):

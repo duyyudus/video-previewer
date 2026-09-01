@@ -109,6 +109,50 @@ def test_purge_folder_all_removes_everything(db, cache_dir, tmp_path):
     assert db.load_scan(db.scan_key(folder, True)) is None
 
 
+def test_delete_videos_chunks_large_lists(db, cache_dir):
+    # H2: SQLite's SQLITE_MAX_VARIABLE_NUMBER is 999 on older builds, so an
+    # unchunked ``IN (?, ...)`` on a 10k+ folder raises "too many SQL
+    # variables". The chunked delete must purge every row and return every
+    # stored thumbnail path.
+    cache = ThumbnailCache(db)
+    vids: list[str] = []
+    thumbs: list[str] = []
+    for i in range(1200):
+        v = f"v{i}"
+        vids.append(v)
+        t = str(cache.thumbnail_path_for(v))
+        thumbs.append(t)
+        db.upsert_video(v, f"/v/{v}.mp4", 1, 1.0, t)
+
+    removed = db.delete_videos(vids)
+
+    assert len(removed) == 1200
+    assert set(removed) == set(thumbs)
+    assert db.get_video("v0") is None
+    assert db.get_video("v1199") is None
+
+
+def test_videos_under_does_not_match_wildcard_folder(db):
+    # H3: SQLite ``LIKE`` treats ``_``/``%`` as wildcards (and is
+    # case-insensitive for ASCII), so ``purge_folder`` on ``season_1`` used to
+    # silently delete a *different* folder's rows (``seasonX1``, ``season-1``).
+    # The Python-side filter must only match a real subpath.
+    db.upsert_video("a", "/v/season_1/a.mp4", 1, 1.0, "/t/a.jpg")
+    db.upsert_video("b", "/v/seasonX1/b.mp4", 1, 1.0, "/t/b.jpg")
+    db.upsert_video("c", "/v/season-1/c.mp4", 1, 1.0, "/t/c.jpg")
+    db.upsert_video("d", "/v/season_1/sub/d.mp4", 1, 1.0, "/t/d.jpg")
+
+    rows = db.videos_under("/v/season_1")
+    paths = {r.path for r in rows}
+
+    # the folder itself and its real subfolder are kept
+    assert "/v/season_1/a.mp4" in paths
+    assert "/v/season_1/sub/d.mp4" in paths
+    # lookalike sibling folders are never matched
+    assert "/v/seasonX1/b.mp4" not in paths
+    assert "/v/season-1/c.mp4" not in paths
+
+
 def test_hydrate_uses_cache(db, cache_dir):
     cache = ThumbnailCache(db)
     item = VideoItem(Path("/v/h.mp4"), 10, 1.0)
