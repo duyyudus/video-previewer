@@ -12,6 +12,25 @@ from .database import Database
 log = logging.getLogger(__name__)
 
 
+def _remove_thumb_file(value: str) -> bool:
+    """Unlink a stored thumbnail path; True when a file was actually removed.
+
+    An empty value is *not* a path: metadata-only and failure-marked rows
+    store ``thumbnail=''``, and ``Path('')`` is the current directory — so an
+    empty value must never reach ``unlink()``.
+    """
+    if not value:
+        return False
+    try:
+        p = Path(value)
+        if p.exists():
+            p.unlink()
+            return True
+    except OSError:
+        log.debug("could not remove thumbnail %s", value)
+    return False
+
+
 class ThumbnailCache:
     """Coordinates on-disk thumbnails with the metadata database."""
 
@@ -35,10 +54,41 @@ class ThumbnailCache:
         item = item.with_metadata(
             row.duration_ms, row.width, row.height, row.vcodec
         )
+        if row.failed or not row.thumbnail:
+            return item  # known-broken file, or a row without a thumbnail yet
         thumb = Path(row.thumbnail)
         if thumb.exists():
             item = item.with_thumbnail(thumb)
         return item
+
+    def store_failed(
+        self,
+        item: VideoItem,
+        duration_ms: int | None = None,
+        width: int | None = None,
+        height: int | None = None,
+        vcodec: str | None = None,
+    ) -> None:
+        """Record that ffmpeg refused *item* (negative cache).
+
+        Any metadata obtained before the failure is still kept; ``_ThumbJob``
+        short-circuits on the ``failed`` flag so the file is never probed or
+        re-extracted until its identity (size/mtime/path) changes. Only a
+        genuine decode failure may be recorded here — see
+        :class:`~video_previewer.media.thumbnailer.ExtractOutcome`.
+        """
+        self._db.upsert_video(
+            vid=item.vid,
+            path=item.path.as_posix(),
+            size=item.size,
+            mtime=item.modified,
+            thumbnail="",
+            duration_ms=duration_ms,
+            width=width,
+            height=height,
+            vcodec=vcodec,
+            failed=True,
+        )
 
     def store(
         self,
@@ -59,6 +109,7 @@ class ThumbnailCache:
             width=width,
             height=height,
             vcodec=vcodec,
+            failed=False,  # a success always clears an earlier failure
         )
 
     def purge_folder(self, folder: Path, fresh: dict[str, tuple[int, float]]) -> int:
@@ -87,15 +138,8 @@ class ThumbnailCache:
         if not stale:
             return 0
         thumbs = self._db.delete_videos(stale)
-        removed = 0
         for t in thumbs:
-            try:
-                p = Path(t)
-                if p.exists():
-                    p.unlink()
-                    removed += 1
-            except OSError:
-                log.debug("could not remove stale thumbnail %s", t)
+            _remove_thumb_file(t)
         return len(stale)
 
     def purge_folder_all(self, folder: Path) -> int:
@@ -108,11 +152,6 @@ class ThumbnailCache:
         vids = [r.vid for r in rows]
         if vids:
             for t in self._db.delete_videos(vids):
-                try:
-                    p = Path(t)
-                    if p.exists():
-                        p.unlink()
-                except OSError:
-                    log.debug("could not remove thumbnail %s", t)
+                _remove_thumb_file(t)
         self._db.delete_scans_for_folder(folder)
         return len(vids)

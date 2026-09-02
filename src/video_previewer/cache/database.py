@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS videos (
     height      INTEGER,
     vcodec      TEXT,
     thumbnail   TEXT NOT NULL,
+    failed      INTEGER NOT NULL DEFAULT 0,
     created     REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_videos_path ON videos (path);
@@ -40,6 +41,24 @@ CREATE TABLE IF NOT EXISTS scans (
     scanned_at REAL NOT NULL
 );
 """
+
+
+def _ensure_schema(conn: sqlite3.Connection) -> None:
+    """Create the schema, adding columns introduced after the first release.
+
+    ``ALTER TABLE ... ADD COLUMN`` is the whole migration story: this DB is a
+    disposable cache, so an old row is either upgraded in place or simply
+    re-derived on the next scan.
+    """
+    conn.executescript(_SCHEMA)
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(videos)")}
+    if "failed" not in columns:
+        # Databases written before the negative cache: an explicit column (not
+        # an empty ``thumbnail`` value) keeps "no thumbnail yet" separate from
+        # "ffmpeg refused this file", and leaves room for a future retry count.
+        conn.execute(
+            "ALTER TABLE videos ADD COLUMN failed INTEGER NOT NULL DEFAULT 0"
+        )
 
 
 @dataclass(slots=True)
@@ -53,6 +72,9 @@ class VideoRow:
     height: int | None
     vcodec: str | None
     thumbnail: str
+    # True when ffmpeg itself refused this exact file (size|mtime): the
+    # thumbnail job short-circuits instead of re-burning ffmpeg every launch.
+    failed: bool = False
 
 
 class Database:
@@ -71,7 +93,7 @@ class Database:
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.executescript(_SCHEMA)
+            _ensure_schema(self._conn)
             self._conn.commit()
 
     # -- lifecycle ---------------------------------------------------------
@@ -116,14 +138,15 @@ class Database:
         width: int | None = None,
         height: int | None = None,
         vcodec: str | None = None,
+        failed: bool = False,
     ) -> None:
         self._guard()
         with self._lock:
             self._conn.execute(
                 """
                 INSERT INTO videos (vid, path, size, mtime, duration_ms, width,
-                                    height, vcodec, thumbnail, created)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                    height, vcodec, thumbnail, failed, created)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(vid) DO UPDATE SET
                     path = excluded.path,
                     size = excluded.size,
@@ -132,10 +155,11 @@ class Database:
                     width = excluded.width,
                     height = excluded.height,
                     vcodec = excluded.vcodec,
-                    thumbnail = excluded.thumbnail
+                    thumbnail = excluded.thumbnail,
+                    failed = excluded.failed
                 """,
                 (vid, path, size, mtime, duration_ms, width, height, vcodec,
-                 thumbnail, time.time()),
+                 thumbnail, int(failed), time.time()),
             )
             self._conn.commit()
 
@@ -196,6 +220,7 @@ class Database:
             height=row["height"],
             vcodec=row["vcodec"],
             thumbnail=row["thumbnail"],
+            failed=bool(row["failed"]),
         )
 
     # -- scan cache ----------------------------------------------------------

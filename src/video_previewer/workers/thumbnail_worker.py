@@ -12,6 +12,7 @@ from .. import config
 from ..cache.cache import ThumbnailCache
 from ..cache.database import Database
 from ..media import metadata, thumbnailer
+from ..media.thumbnailer import ExtractOutcome
 from ..models.video_item import VideoItem
 
 log = logging.getLogger(__name__)
@@ -45,22 +46,28 @@ class _ThumbJob(QRunnable):
         try:
             thumb_path = self._cache.thumbnail_path_for(vid)
 
-            # 1) Cache hit: metadata + thumbnail already on disk.
+            # 1) Cache hit: metadata + thumbnail already on disk. Checked
+            # before the failure marker — a usable JPEG always beats it.
             row = self._db.get_video(vid)
-            if row is not None and Path(row.thumbnail) == thumb_path and thumb_path.exists():
-                updated = item.with_metadata(
-                    row.duration_ms, row.width, row.height, row.vcodec
-                ).with_thumbnail(thumb_path)
-                self._signals.ready.emit(updated)
-                return
+            if row is not None:
+                if row.thumbnail and Path(row.thumbnail) == thumb_path and thumb_path.exists():
+                    updated = item.with_metadata(
+                        row.duration_ms, row.width, row.height, row.vcodec
+                    ).with_thumbnail(thumb_path)
+                    self._signals.ready.emit(updated)
+                    return
+                if row.failed:
+                    # Negative cache: this exact file (same vid) was already
+                    # refused by ffmpeg. Don't re-probe, never re-burn ffmpeg.
+                    self._signals.failed.emit(str(item.path))
+                    return
 
             # 2) Probe + extract.
             probe = metadata.probe_video(item.path)
-            ok = thumbnailer.extract_thumbnail(item.path, thumb_path,
-                                               probe.duration_ms if probe else None)
-            if not ok:
-                self._signals.failed.emit(str(item.path))
-            else:
+            outcome = thumbnailer.extract_thumbnail(
+                item.path, thumb_path, probe.duration_ms if probe else None
+            )
+            if outcome is ExtractOutcome.OK:
                 try:
                     self._cache.store(
                         item,
@@ -83,6 +90,25 @@ class _ThumbJob(QRunnable):
                     else item
                 ).with_thumbnail(thumb_path)
                 self._signals.ready.emit(updated)
+                return
+
+            if outcome is ExtractOutcome.FAILED and item.path.exists():
+                # Negative cache: ffmpeg itself refused a file that is really
+                # there, so the next launch short-circuits instead of running
+                # ffmpeg again. Every other outcome (binary missing, file
+                # offline, seek timeout, disk full) says nothing about the
+                # file and is deliberately left retryable.
+                try:
+                    self._cache.store_failed(
+                        item,
+                        probe.duration_ms if probe else None,
+                        probe.width if probe else None,
+                        probe.height if probe else None,
+                        probe.vcodec if probe else None,
+                    )
+                except sqlite3.ProgrammingError:
+                    pass  # DB closed during shutdown
+            self._signals.failed.emit(str(item.path))
         except Exception:  # noqa: BLE001 - fail soft (rule 8)
             # A bad file or a closed DB must never crash the app nor leak the
             # concurrency slot. Log and fall back to the static thumbnail.

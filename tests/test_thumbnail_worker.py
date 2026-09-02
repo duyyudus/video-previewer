@@ -1,9 +1,5 @@
-"""Thumbnail worker robustness: fail-soft exception guard (rule 8).
-
-Covers the H1 high-priority finding: ``_ThumbJob.run()`` had no exception
-guard, so a ``sqlite3.ProgrammingError`` from a closed ``Database`` skipped
-``job_done`` entirely — leaking the concurrency slot for the life of the
-process and stalling the ``closeEvent`` drain loop.
+"""Thumbnail worker robustness: fail-soft guards, queue bookkeeping and the
+negative cache (audit H1, M2, M3).
 """
 
 from __future__ import annotations
@@ -15,6 +11,8 @@ import pytest
 from video_previewer import config
 from video_previewer.cache.cache import ThumbnailCache
 from video_previewer.cache.database import Database
+from video_previewer.media import metadata, thumbnailer
+from video_previewer.media.thumbnailer import ExtractOutcome
 from video_previewer.models.video_item import VideoItem
 from video_previewer.workers.thumbnail_worker import (
     ThumbnailQueue,
@@ -28,6 +26,18 @@ def db(cache_dir):
     d = Database(cache_dir / "metadata.sqlite")
     yield d
     d.close()
+
+
+def _signals() -> tuple[ThumbSignals, list, list, list]:
+    """A fresh ThumbSignals plus (ready, failed, done) collectors."""
+    signals = ThumbSignals()
+    ready: list[VideoItem] = []
+    failed: list[str] = []
+    done: list[str] = []
+    signals.ready.connect(ready.append)
+    signals.failed.connect(failed.append)
+    signals.job_done.connect(done.append)
+    return signals, ready, failed, done
 
 
 def test_job_done_emitted_when_db_closed(qapp, cache_dir, db):
@@ -49,13 +59,11 @@ def test_job_done_emitted_when_db_closed(qapp, cache_dir, db):
     )
     db.close()
 
-    signals = ThumbSignals()
-    done: list[str] = []
-    signals.job_done.connect(done.append)
-
+    signals, ready, failed, done = _signals()
     _ThumbJob(item, db, cache, signals).run()
 
-    assert done == [item.vid]
+    assert done == [item.vid]  # exactly once
+    assert ready == [] and failed == []
 
 
 # -- queue bookkeeping (audit M2: dict-keyed pending, clear_pending) ----------
@@ -84,3 +92,140 @@ def test_queue_dedups_pending_and_clears_on_demand(qapp, cache_dir, monkeypatch)
     q.request(a)  # the queue keeps working afterwards
     assert q.pending_count() == 1
     db.close()
+
+
+# -- negative cache for refused files (audit M3) ------------------------------
+
+
+def test_negative_cache_short_circuits_broken_file(qapp, cache_dir, db, monkeypatch):
+    """A row marked failed must not re-probe/re-extract — just fail fast."""
+    cache = ThumbnailCache(db)
+    item = VideoItem(Path("/v/broken.mp4"), 10, 1.0)
+    db.upsert_video(
+        item.vid, item.path.as_posix(), item.size, item.modified, "", failed=True
+    )
+
+    def boom(*args, **kwargs):  # any ffmpeg work from here is a bug
+        raise AssertionError("must not re-probe/re-extract a known-bad file")
+
+    monkeypatch.setattr(metadata, "probe_video", boom)
+    monkeypatch.setattr(thumbnailer, "extract_thumbnail", boom)
+
+    signals, ready, failed, done = _signals()
+    _ThumbJob(item, db, cache, signals).run()
+
+    assert failed == [str(item.path)]
+    assert ready == []
+    assert done == [item.vid]  # slot returned exactly once
+
+
+def test_existing_thumbnail_wins_over_failure_marker(qapp, cache_dir, db, monkeypatch):
+    # Defensive ordering: a usable JPEG on disk for this vid beats a marker.
+    cache = ThumbnailCache(db)
+    item = VideoItem(Path("/v/ok.mp4"), 10, 1.0)
+    thumb = cache.thumbnail_path_for(item.vid)
+    thumb.parent.mkdir(parents=True, exist_ok=True)
+    thumb.write_bytes(b"jpeg")
+    db.upsert_video(
+        item.vid, item.path.as_posix(), item.size, item.modified,
+        str(thumb), 4000, failed=True,
+    )
+
+    def boom(*args, **kwargs):
+        raise AssertionError("a cache hit must not touch ffmpeg")
+
+    monkeypatch.setattr(metadata, "probe_video", boom)
+    monkeypatch.setattr(thumbnailer, "extract_thumbnail", boom)
+
+    signals, ready, failed, done = _signals()
+    _ThumbJob(item, db, cache, signals).run()
+
+    assert failed == []
+    assert ready and ready[0].thumb_ready and ready[0].thumbnail_path == thumb
+
+
+def test_decode_failure_is_recorded_for_next_launch(qapp, cache_dir, db, monkeypatch,
+                                                    tmp_path):
+    """ffmpeg refusing a file that is really there writes the marker row."""
+    monkeypatch.setattr(metadata, "probe_video", lambda path: None)
+    monkeypatch.setattr(
+        thumbnailer, "extract_thumbnail", lambda *a, **k: ExtractOutcome.FAILED
+    )
+
+    cache = ThumbnailCache(db)
+    p = tmp_path / "bad.mp4"
+    p.write_bytes(b"x" * 10)
+    item = VideoItem(p, 10, 1.0)
+    signals, ready, failed, done = _signals()
+
+    _ThumbJob(item, db, cache, signals).run()
+
+    assert failed == [str(item.path)]
+    assert ready == []
+    assert done == [item.vid]
+    row = db.get_video(item.vid)
+    assert row is not None and row.failed is True and row.thumbnail == ""
+    # hydrate must not resurrect a phantom thumbnail for it
+    fresh = cache.hydrate(VideoItem(p, 10, 1.0))
+    assert fresh.thumb_ready is False
+    assert fresh.thumbnail_path is None
+
+
+def test_transient_failure_is_not_recorded(qapp, cache_dir, db, monkeypatch, tmp_path):
+    # A transient outcome (missing binary, seek timeout, disk full) says
+    # nothing about the file, so it must stay retryable next launch instead of
+    # poisoning a vid whose identity never changes.
+    monkeypatch.setattr(metadata, "probe_video", lambda path: None)
+    monkeypatch.setattr(
+        thumbnailer, "extract_thumbnail", lambda *a, **k: ExtractOutcome.TRANSIENT
+    )
+
+    cache = ThumbnailCache(db)
+    p = tmp_path / "slow-on-network-share.mp4"
+    p.write_bytes(b"x" * 10)
+    item = VideoItem(p, 10, 1.0)
+    signals, ready, failed, done = _signals()
+
+    _ThumbJob(item, db, cache, signals).run()
+
+    assert failed == [str(item.path)]  # still reported this session
+    assert ready == []
+    assert db.get_video(item.vid) is None  # nothing poisoned for next launch
+
+
+def test_failure_of_a_vanished_file_is_not_recorded(qapp, cache_dir, db, monkeypatch):
+    # The file went away mid-job (deleted, or an offline share): marking its
+    # vid permanently broken would survive the drive coming back unchanged.
+    monkeypatch.setattr(metadata, "probe_video", lambda path: None)
+    monkeypatch.setattr(
+        thumbnailer, "extract_thumbnail", lambda *a, **k: ExtractOutcome.FAILED
+    )
+
+    cache = ThumbnailCache(db)
+    item = VideoItem(Path("/nowhere/offline-share/bad.mp4"), 10, 1.0)
+    signals, ready, failed, done = _signals()
+
+    _ThumbJob(item, db, cache, signals).run()
+
+    assert failed == [str(item.path)]
+    assert db.get_video(item.vid) is None
+
+
+def test_failure_not_recorded_when_ffmpeg_missing(qapp, cache_dir, db, monkeypatch):
+    """Missing ffmpeg is transient, not a bad file — no negative-cache row.
+
+    Drives the real ``extract_thumbnail`` so the classification itself is
+    covered, not just a stubbed outcome.
+    """
+    monkeypatch.setattr(config, "ffmpeg_path", lambda: None)
+    monkeypatch.setattr(metadata, "probe_video", lambda path: None)
+
+    cache = ThumbnailCache(db)
+    item = VideoItem(Path("/v/ok-later.mp4"), 10, 1.0)
+    signals, ready, failed, done = _signals()
+
+    _ThumbJob(item, db, cache, signals).run()
+
+    assert failed == [str(item.path)]  # still reported this session
+    assert ready == []
+    assert db.get_video(item.vid) is None  # but nothing poisoned for next launch

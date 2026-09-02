@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -171,3 +172,52 @@ def test_hydrate_uses_cache(db, cache_dir):
     # unknown file -> unchanged
     other = VideoItem(Path("/v/new.mp4"), 5, 2.0)
     assert cache.hydrate(other) is other
+
+
+# -- negative-cache flag + fail-soft startup (audit M3, M6) ----------------------
+
+
+def test_failed_flag_roundtrip(db):
+    # The "known broken file" marker lives in its own column, so "no thumbnail
+    # yet" (thumbnail='') stays distinguishable from "ffmpeg refused this file"
+    # instead of overloading one sentinel value.
+    db.upsert_video("v1", "/v/a.mp4", 100, 1.0, "", 5000, 320, 180, "h264", failed=True)
+    row = db.get_video("v1")
+    assert row is not None
+    assert row.failed is True
+    assert row.thumbnail == ""
+    assert row.duration_ms == 5000  # metadata probed before the failure survives
+
+    # a later success for the same vid must clear the marker
+    db.upsert_video("v1", "/v/a.mp4", 100, 1.0, "/t/v1.jpg", 5000)
+    row = db.get_video("v1")
+    assert row is not None and row.failed is False
+
+
+def test_old_database_is_upgraded_in_place(cache_dir):
+    # Databases written before the negative cache have no ``failed`` column:
+    # opening one upgrades it and keeps every existing row.
+    path = cache_dir / "metadata.sqlite"
+    legacy = sqlite3.connect(str(path))
+    legacy.execute(
+        "CREATE TABLE videos (vid TEXT PRIMARY KEY, path TEXT NOT NULL,"
+        " size INTEGER NOT NULL, mtime REAL NOT NULL, duration_ms INTEGER,"
+        " width INTEGER, height INTEGER, vcodec TEXT, thumbnail TEXT NOT NULL,"
+        " created REAL NOT NULL)"
+    )
+    legacy.execute(
+        "INSERT INTO videos VALUES ('v1','/v/a.mp4',1,1.0,2000,320,180,'h264',"
+        "'/t/v1.jpg',0.0)"
+    )
+    legacy.commit()
+    legacy.close()
+
+    db = Database(path)
+    try:
+        row = db.get_video("v1")
+        assert row is not None
+        assert row.failed is False and row.duration_ms == 2000
+        db.upsert_video("v1", "/v/a.mp4", 1, 1.0, "", failed=True)
+        assert db.get_video("v1").failed is True
+    finally:
+        db.close()
