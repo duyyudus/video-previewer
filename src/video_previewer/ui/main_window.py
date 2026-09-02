@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 
 from .. import config
 from ..cache.cache import ThumbnailCache
-from ..cache.database import Database
+from ..cache.database import open_database
 from ..media.player import PreviewPlayer
 from ..models.video_item import VideoItem
 from ..models.video_model import VideoModel
@@ -47,7 +47,11 @@ class MainWindow(QMainWindow):
 
         # --- persistence + cache -------------------------------------------------
         self._settings = QSettings()
-        self._db = Database(config.database_path())
+        # Fail soft (rule 8): a corrupt metadata DB or broken cache dir must
+        # never kill startup; open_database quarantines/retries and falls
+        # back to an empty in-memory cache, ThumbnailCache degrades to "no
+        # thumbnails" if its directory is unwritable.
+        self._db = open_database(config.database_path())
         self._cache = ThumbnailCache(self._db)
 
         # --- model / view / player -------------------------------------------------
@@ -97,8 +101,15 @@ class MainWindow(QMainWindow):
         vbox.addWidget(self._grid, 1)
         self.setCentralWidget(central)
 
+        unavailable: list[str] = []
         if not config.ffmpeg_path() or not config.ffprobe_path():
-            self._status_label.setText("ffmpeg/ffprobe not found \u2014 thumbnails unavailable")
+            unavailable.append("ffmpeg/ffprobe not found")
+        if not self._cache.usable:
+            unavailable.append(f"cannot write {self._cache.directory}")
+        if unavailable:
+            self._status_label.setText(
+                "; ".join(unavailable) + " \u2014 thumbnails unavailable"
+            )
 
         # Restore the last opened folder (if it still exists).
         last = self._settings.value(config.SETTING_LAST_FOLDER)

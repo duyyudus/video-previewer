@@ -37,11 +37,25 @@ class ThumbnailCache:
     def __init__(self, db: Database) -> None:
         self._db = db
         self._dir: Path = config.thumbnail_dir()
-        self._dir.mkdir(parents=True, exist_ok=True)
+        self._usable = True
+        try:
+            self._dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            # Fail soft (rule 8): an unwritable cache dir degrades to "no
+            # thumbnails" instead of killing startup. ``usable`` lets the
+            # queue drop requests entirely rather than run a doomed ffprobe +
+            # ffmpeg attempt (and log a traceback) for every single file.
+            self._usable = False
+            log.warning("cannot create thumbnail cache dir %s (%s)", self._dir, exc)
 
     @property
     def directory(self) -> Path:
         return self._dir
+
+    @property
+    def usable(self) -> bool:
+        """False when the thumbnail directory cannot be written at all."""
+        return self._usable
 
     def thumbnail_path_for(self, vid: str) -> Path:
         return self._dir / f"{vid}.jpg"

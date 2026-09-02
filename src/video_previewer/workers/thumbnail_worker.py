@@ -143,6 +143,11 @@ class ThumbnailQueue(QObject):
     def request(self, item: VideoItem) -> None:
         if item.thumb_ready:
             return
+        if not self._cache.usable:
+            # Unwritable cache dir: every job would probe the file and then
+            # fail to write its JPEG. Drop the request instead of burning one
+            # ffprobe (plus a logged traceback) per file, every launch.
+            return
         vid = item.vid
         if vid in self._inflight or vid in self._pending:
             return

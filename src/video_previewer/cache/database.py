@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import os
 import platform
 import sqlite3
 import threading
@@ -13,6 +15,8 @@ from pathlib import Path
 from typing import Any
 
 from ..models.video_item import normalize_path
+
+log = logging.getLogger(__name__)
 
 # SQLite binds at most SQLITE_MAX_VARIABLE_NUMBER parameters per statement
 # (999 on older builds, 32766 on modern ones). Chunk large vid lists so a
@@ -91,10 +95,19 @@ class Database:
         self._closed = False
         self._conn = sqlite3.connect(str(path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-        with self._lock:
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            _ensure_schema(self._conn)
-            self._conn.commit()
+        try:
+            with self._lock:
+                self._conn.execute("PRAGMA journal_mode=WAL")
+                _ensure_schema(self._conn)
+                self._conn.commit()
+        except sqlite3.Error:
+            # A corrupt file must not leave this connection (and its OS file
+            # handle, which would block quarantine/rename on Windows) behind.
+            try:
+                self._conn.close()
+            except sqlite3.Error:
+                pass
+            raise
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -270,3 +283,88 @@ class Database:
                 (key, json.dumps(entries), time.time()),
             )
             self._conn.commit()
+
+
+# SQLite result codes that mean "the bytes of this file are unusable". Only
+# those justify renaming the file away: note ``sqlite3.OperationalError`` (a
+# lock, a busy DB, an unopenable path) *is* a subclass of
+# ``sqlite3.DatabaseError``, so the class alone cannot tell corruption from a
+# transient access problem.
+_CORRUPT_SQLITE_CODES = frozenset({11, 26})  # SQLITE_CORRUPT, SQLITE_NOTADB
+_CORRUPT_SQLITE_NAMES = ("SQLITE_CORRUPT", "SQLITE_NOTADB")
+
+
+def _is_corrupt(exc: sqlite3.Error) -> bool:
+    """True when SQLite says the database *file content* is unreadable."""
+    name = getattr(exc, "sqlite_errorname", "") or ""
+    code = getattr(exc, "sqlite_errorcode", None)
+    if name or code is not None:
+        return name.startswith(_CORRUPT_SQLITE_NAMES) or code in _CORRUPT_SQLITE_CODES
+    # Ancient binding without error codes: fall back to the message text.
+    text = str(exc).lower()
+    return "not a database" in text or "malformed" in text
+
+
+def open_database(path: Path) -> Database:
+    """Open the metadata DB, fail soft (rule 8): never crash startup.
+
+    The cache is a pure optimization, so a damaged ``metadata.sqlite`` or an
+    unwritable cache dir degrades the session instead of killing the app.
+    Recovery is limited to one attempt: quarantine the *corrupt* file
+    (``*.bak``) and reopen; anything else falls back to an empty in-memory
+    database for this session (logged).
+    """
+    try:
+        return Database(path)
+    except sqlite3.Error as exc:
+        if not _is_corrupt(exc):
+            # "database is locked"/"unable to open": another process owns this
+            # file, and there is no single-instance guard. Renaming it away
+            # would silently destroy *their* writes (on POSIX the rename even
+            # succeeds), so leave the file strictly alone.
+            log.warning(
+                "metadata DB unavailable (%s); running with an empty "
+                "in-memory cache for this session",
+                exc,
+            )
+            return Database(Path(":memory:"))
+        log.warning(
+            "metadata DB unreadable (%s); moving %s aside and retrying once",
+            exc,
+            path,
+        )
+    except OSError as exc:
+        # Cannot even prepare the directory (read-only/unmounted volume).
+        log.warning(
+            "cannot prepare metadata DB at %s (%s); running with an empty "
+            "in-memory cache for this session",
+            path,
+            exc,
+        )
+        return Database(Path(":memory:"))
+
+    _quarantine(path)
+    try:
+        return Database(path)
+    except (sqlite3.Error, OSError) as exc:
+        log.warning(
+            "metadata DB still unusable after quarantine (%s); running with an "
+            "empty in-memory cache for this session",
+            exc,
+        )
+        return Database(Path(":memory:"))
+
+
+def _quarantine(path: Path) -> None:
+    """Move a corrupt DB file (and its WAL sidecars) aside as ``*.bak``.
+
+    An existing ``*.bak`` is overwritten — the freshest corrupt copy is the
+    one worth keeping for inspection.
+    """
+    for suffix in ("", "-wal", "-shm"):
+        p = Path(str(path) + suffix)
+        if p.exists():
+            try:
+                os.replace(p, Path(str(p) + ".bak"))
+            except OSError as exc:
+                log.warning("could not move %s aside: %s", p, exc)

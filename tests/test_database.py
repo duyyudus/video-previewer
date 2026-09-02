@@ -1,4 +1,4 @@
-"""Database + ThumbnailCache: persistence and stale-entry purge."""
+"""Database + ThumbnailCache: persistence, stale-entry purge, fail-soft open."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from video_previewer.cache.cache import ThumbnailCache
-from video_previewer.cache.database import Database
+from video_previewer.cache.database import Database, open_database
 from video_previewer.models.video_item import VideoItem
 
 
@@ -221,3 +221,107 @@ def test_old_database_is_upgraded_in_place(cache_dir):
         assert db.get_video("v1").failed is True
     finally:
         db.close()
+
+
+def test_open_database_quarantines_corrupt_file(cache_dir):
+    # A corrupt metadata.sqlite used to raise straight out of
+    # MainWindow.__init__ and kill startup (violating rule 8). open_database
+    # must move the corrupt file aside and reopen a fresh one.
+    path = cache_dir / "metadata.sqlite"
+    path.write_bytes(b"definitely not a sqlite database" * 64)
+
+    db = open_database(path)
+    try:
+        db.upsert_video("v1", "/v/a.mp4", 100, 1.0, "/t/v1.jpg")
+        assert db.get_video("v1") is not None
+    finally:
+        db.close()
+
+    assert (cache_dir / "metadata.sqlite.bak").read_bytes().startswith(b"definitely")
+    # the recovered DB is a normal, persistent one: the next startup reopens it
+    db2 = open_database(path)
+    try:
+        assert db2.get_video("v1") is not None
+    finally:
+        db2.close()
+
+
+def test_open_database_does_not_quarantine_a_busy_db(cache_dir, monkeypatch):
+    # "database is locked" is an OperationalError, not corruption: another
+    # instance owns the file (there is no single-instance guard). Renaming it
+    # away would destroy *their* writes — and unlike Windows, POSIX lets the
+    # rename succeed — so only an unreadable file may be quarantined.
+    from video_previewer.cache import database as dbmod
+
+    path = cache_dir / "metadata.sqlite"
+    Database(path).close()  # a real, healthy database owned by another run
+
+    real = dbmod.Database
+
+    def locked(p):
+        if str(p) != ":memory:":
+            raise sqlite3.OperationalError("database is locked")
+        return real(p)
+
+    quarantined: list[Path] = []
+    monkeypatch.setattr(dbmod, "Database", locked)
+    monkeypatch.setattr(dbmod, "_quarantine", quarantined.append)
+
+    db = dbmod.open_database(path)
+    try:
+        db.upsert_video("v1", "/v/a.mp4", 100, 1.0, "/t/v1.jpg")
+        assert db.get_video("v1") is not None  # degraded: in-memory this session
+    finally:
+        db.close()
+
+    assert quarantined == []
+    assert path.exists()
+    assert not (cache_dir / "metadata.sqlite.bak").exists()
+
+
+def test_open_database_falls_back_to_memory(cache_dir, monkeypatch):
+    # If even quarantine+retry can't produce a usable on-disk DB (e.g. an
+    # unwritable volume), the app must still start — on an in-memory cache.
+    from video_previewer.cache import database as dbmod
+
+    real = dbmod.Database
+
+    def broken(path):
+        if str(path) != ":memory:":
+            # A corruption-shaped error, so the quarantine path is exercised
+            # and even recovery cannot help here.
+            raise sqlite3.DatabaseError("file is not a database")
+        return real(path)
+
+    monkeypatch.setattr(dbmod, "Database", broken)
+
+    db = dbmod.open_database(cache_dir / "metadata.sqlite")
+    try:
+        db.upsert_video("v1", "/v/a.mp4", 100, 1.0, "/t/v1.jpg")
+        assert db.get_video("v1").path == "/v/a.mp4"
+    finally:
+        db.close()
+
+
+def test_unwritable_cache_dir_degrades_but_starts(cache_dir, monkeypatch):
+    # Audit M7: ThumbnailCache must not crash startup when its directory
+    # cannot be created — and it must report itself unusable so the queue can
+    # drop requests instead of running a doomed probe/extract per file.
+    from video_previewer.cache import cache as cache_mod
+
+    real_mkdir = Path.mkdir
+
+    def failing_mkdir(self, *args, **kwargs):
+        if self.name == "thumbnails":
+            raise PermissionError("read-only volume")
+        return real_mkdir(self, *args, **kwargs)
+
+    db = Database(cache_dir / "metadata.sqlite")
+    monkeypatch.setattr(Path, "mkdir", failing_mkdir)
+    try:
+        cache = cache_mod.ThumbnailCache(db)
+    finally:
+        monkeypatch.setattr(Path, "mkdir", real_mkdir)
+
+    assert cache.usable is False
+    db.close()

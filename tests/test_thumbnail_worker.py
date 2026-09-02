@@ -94,6 +94,37 @@ def test_queue_dedups_pending_and_clears_on_demand(qapp, cache_dir, monkeypatch)
     db.close()
 
 
+def test_queue_drops_work_when_cache_dir_unusable(qapp, cache_dir, monkeypatch):
+    # Audit M7 follow-up: an unwritable thumbnails dir must not degrade into
+    # one doomed job — and one full ffprobe plus a logged traceback — per file
+    # on every launch.
+    real_mkdir = Path.mkdir
+
+    def failing_mkdir(self, *args, **kwargs):
+        if self.name == "thumbnails":
+            raise PermissionError("read-only volume")
+        return real_mkdir(self, *args, **kwargs)
+
+    db = Database(cache_dir / "metadata.sqlite")
+    monkeypatch.setattr(Path, "mkdir", failing_mkdir)
+    try:
+        cache = ThumbnailCache(db)
+    finally:
+        monkeypatch.setattr(Path, "mkdir", real_mkdir)
+    assert cache.usable is False
+
+    probed: list[Path] = []
+    monkeypatch.setattr(metadata, "probe_video", lambda p: probed.append(p) or None)
+    q = ThumbnailQueue(db, cache)
+
+    q.request(VideoItem(Path("/v/a.mp4"), 10, 1.0))
+    q.request(VideoItem(Path("/v/b.mp4"), 20, 2.0))
+
+    assert q.pending_count() == 0
+    assert probed == []  # not a single probe was burned
+    db.close()
+
+
 # -- negative cache for refused files (audit M3) ------------------------------
 
 
