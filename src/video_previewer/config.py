@@ -3,7 +3,10 @@
 Tunables are loaded from ``settings.yml`` in the project root (override the
 location with the ``VIDEO_PREVIEWER_SETTINGS`` environment variable). A
 missing file, or a missing/invalid entry, falls back to the built-in
-defaults below, so a bad edit can never break the app.
+defaults below, so a bad edit can never break the app. Numeric entries are
+additionally clamped to their valid range: an out-of-range value (e.g.
+``thumb_concurrency: 0``, which would starve the thumbnail queue) is logged
+and pinned to the nearest bound instead of being used as-is.
 """
 
 from __future__ import annotations
@@ -61,6 +64,11 @@ DEFAULTS: dict[str, Any] = {
     "double_click_max_dist": 10,
 }
 
+# Repo-checkout assumption: config.py lives at <root>/src/video_previewer/,
+# so parents[2] is the project root holding settings.yml. An installed wheel
+# (console script) has no settings.yml next to site-packages and silently
+# runs on the built-in defaults below; point VIDEO_PREVIEWER_SETTINGS at a
+# file to configure an installed copy.
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _SETTINGS_FILE = _PROJECT_ROOT / "settings.yml"
 
@@ -117,20 +125,43 @@ def _read_settings_file() -> dict[str, Any]:
     return data
 
 
-def _num(key: str, cast: type) -> int | float:
-    """Value of *key* as *cast* (int/float), falling back to its default."""
+def _num(
+    key: str,
+    cast: type,
+    minimum: int | float | None = None,
+    maximum: int | float | None = None,
+) -> int | float:
+    """Value of *key* as *cast* (int/float), falling back to its default.
+
+    Out-of-range values are clamped to the nearest bound (with a warning)
+    rather than used as-is: ``thumb_concurrency: 0`` would otherwise start
+    no thumbnail job ever, and ``scan_batch: 0`` raises ``ValueError``
+    inside the scanner's ``range(0, n, 0)`` batching.
+    """
     default = DEFAULTS[key]
     value = _settings_data.get(key, default)
     if value is None or isinstance(value, bool):
         log.warning("settings: %s must be a number, using default %s", key, default)
-        return cast(default)
-    try:
-        return cast(value)
-    except (TypeError, ValueError):
+        result = cast(default)
+    else:
+        try:
+            result = cast(value)
+        except (TypeError, ValueError):
+            log.warning(
+                "settings: %s is not a valid number, using default %s", key, default
+            )
+            result = cast(default)
+    if minimum is not None and result < minimum:
         log.warning(
-            "settings: %s is not a valid number, using default %s", key, default
+            "settings: %s=%s is below the minimum %s, clamped", key, result, minimum
         )
-        return cast(default)
+        result = cast(minimum)
+    if maximum is not None and result > maximum:
+        log.warning(
+            "settings: %s=%s is above the maximum %s, clamped", key, result, maximum
+        )
+        result = cast(maximum)
+    return result
 
 
 def _extensions() -> frozenset[str]:
@@ -177,22 +208,33 @@ def load_settings() -> None:
     _settings_data.update(_read_settings_file())
 
     SUPPORTED_EXTENSIONS = _extensions()
-    THUMB_WIDTH = _num("thumb_width", int)
-    THUMB_POSITION_RATIO = _num("thumb_position_ratio", float)
-    THUMB_FALLBACK_SECONDS = _num("thumb_fallback_seconds", float)
-    THUMB_EXTRACT_TIMEOUT = _num("thumb_extract_timeout", int)
-    PROBE_TIMEOUT = _num("probe_timeout", int)
-    THUMB_CONCURRENCY = _num("thumb_concurrency", int)
-    SCAN_BATCH = _num("scan_batch", int)
-    CELL_WIDTH = _num("cell_width", int)
-    CELL_ASPECT = _num("cell_aspect", float)
-    FILENAME_ROW = _num("filename_row", int)
-    GRID_SPACING = _num("grid_spacing", int)
-    MIN_COLS = _num("min_cols", int)
-    MAX_COLS = _num("max_cols", int)
-    AUTOPLAY_DELAY_MS = _num("autoplay_delay_ms", int)
-    SEEK_THROTTLE_MS = _num("seek_throttle_ms", int)
-    DOUBLE_CLICK_MAX_DIST = _num("double_click_max_dist", int)
+    THUMB_WIDTH = _num("thumb_width", int, minimum=1)
+    THUMB_POSITION_RATIO = _num(
+        "thumb_position_ratio", float, minimum=0.0, maximum=1.0
+    )
+    THUMB_FALLBACK_SECONDS = _num("thumb_fallback_seconds", float, minimum=0.0)
+    THUMB_EXTRACT_TIMEOUT = _num("thumb_extract_timeout", int, minimum=1)
+    PROBE_TIMEOUT = _num("probe_timeout", int, minimum=1)
+    THUMB_CONCURRENCY = _num("thumb_concurrency", int, minimum=1)
+    SCAN_BATCH = _num("scan_batch", int, minimum=1)
+    CELL_WIDTH = _num("cell_width", int, minimum=1)
+    CELL_ASPECT = _num("cell_aspect", float, minimum=0.01)
+    FILENAME_ROW = _num("filename_row", int, minimum=0)
+    GRID_SPACING = _num("grid_spacing", int, minimum=0)
+    MIN_COLS = _num("min_cols", int, minimum=1)
+    MAX_COLS = _num("max_cols", int, minimum=1)
+    if MAX_COLS < MIN_COLS:
+        log.warning(
+            "settings: max_cols=%s is below min_cols=%s, using min_cols",
+            MAX_COLS,
+            MIN_COLS,
+        )
+        MAX_COLS = MIN_COLS
+    AUTOPLAY_DELAY_MS = _num("autoplay_delay_ms", int, minimum=0)
+    # Floor of 1 ms: 0 would disable the throttle entirely (rule 5 caps
+    # scrubbing at ~30 setPosition/s), so it is clamped rather than allowed.
+    SEEK_THROTTLE_MS = _num("seek_throttle_ms", int, minimum=1)
+    DOUBLE_CLICK_MAX_DIST = _num("double_click_max_dist", int, minimum=0)
 
 
 load_settings()

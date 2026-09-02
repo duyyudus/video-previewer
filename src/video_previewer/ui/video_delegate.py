@@ -1,8 +1,8 @@
 """Custom delegate: paints one video tile (thumbnail + filename).
 
 Only visible items are painted (QListView virtualizes), and decoded
-thumbnails are kept in a small LRU pixmap cache so scrolling never hits
-disk more than once per video.
+thumbnails are kept in a small LRU pixmap cache — decoded at tile size —
+so scrolling never hits disk more than once per video.
 """
 
 from __future__ import annotations
@@ -10,7 +10,15 @@ from __future__ import annotations
 from collections import OrderedDict
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt
-from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPen, QPolygon, QPixmap
+from PySide6.QtGui import (
+    QColor,
+    QFontMetrics,
+    QImageReader,
+    QPainter,
+    QPen,
+    QPolygon,
+    QPixmap,
+)
 from PySide6.QtWidgets import QStyledItemDelegate
 
 from .. import config
@@ -24,12 +32,15 @@ _NAME_COLOR = QColor(225, 225, 232)
 _NAME_COLOR_DIM = QColor(150, 150, 160)
 
 _PIXMAP_CACHE_LIMIT = 256
+# Decoded pixmaps are cached per *quantized* tile width so a window resize
+# does not invalidate every entry, while keeping the cache small and bounded.
+_PIXMAP_SIZE_BUCKET = 32
 
 
 class VideoDelegate(QStyledItemDelegate):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self._pixmaps: OrderedDict[str, QPixmap] = OrderedDict()
+        self._pixmaps: OrderedDict[tuple[str, int], QPixmap] = OrderedDict()
 
     # -- sizing ---------------------------------------------------------------
 
@@ -63,7 +74,7 @@ class VideoDelegate(QStyledItemDelegate):
         thumb_path = index.data(VideoModel.ThumbnailPathRole)
         ready = bool(index.data(VideoModel.ThumbReadyRole))
         if ready and thumb_path:
-            pix = self._load_pixmap(str(thumb_path))
+            pix = self._load_pixmap(str(thumb_path), img_rect.size())
             if not pix.isNull():
                 painter.setClipRect(img_rect)
                 painter.drawPixmap(img_rect, pix, cover_source(pix, img_rect))
@@ -102,20 +113,45 @@ class VideoDelegate(QStyledItemDelegate):
         )
         painter.drawPolygon(tri)
 
-    def _load_pixmap(self, path: str) -> QPixmap:
-        pix = self._pixmaps.get(path)
+    def _load_pixmap(self, path: str, tile: QSize) -> QPixmap:
+        """Decode *path* at (roughly) tile size and LRU-cache it.
+
+        ``QImageReader.setScaledSize`` lets the JPEG decoder downscale
+        during decode (DCT scaling) instead of handing the GUI thread a
+        full 320 px bitmap per tile, which roughly halves the resident
+        memory of the LRU. The cache key carries a quantized tile width so
+        resizing does not thrash it; ``cover_source`` center-crops the
+        aspect-preserving result exactly as it would the full-size one.
+        """
+        bucket = max(
+            _PIXMAP_SIZE_BUCKET,
+            -(-max(tile.width(), 1) // _PIXMAP_SIZE_BUCKET) * _PIXMAP_SIZE_BUCKET,
+        )
+        key = (path, bucket)
+        pix = self._pixmaps.get(key)
         if pix is not None:
-            self._pixmaps.move_to_end(path)
+            self._pixmaps.move_to_end(key)
             return pix
-        pix = QPixmap()
-        pix.load(path)
+        pix = self._decode(path, bucket)
         if pix.isNull():
             return pix  # don't cache failures
-        self._pixmaps[path] = pix
-        self._pixmaps.move_to_end(path)
+        self._pixmaps[key] = pix
+        self._pixmaps.move_to_end(key)
         while len(self._pixmaps) > _PIXMAP_CACHE_LIMIT:
             self._pixmaps.popitem(last=False)
         return pix
+
+    @staticmethod
+    def _decode(path: str, bucket: int) -> QPixmap:
+        reader = QImageReader(path)
+        source = reader.size()
+        if source.isValid() and source.width() > bucket:
+            height = max(1, round(source.height() * bucket / source.width()))
+            reader.setScaledSize(QSize(bucket, height))
+        image = reader.read()
+        if image.isNull():
+            return QPixmap()
+        return QPixmap.fromImage(image)
 
     def clear_pixmap_cache(self) -> None:
         self._pixmaps.clear()

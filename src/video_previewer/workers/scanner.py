@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import os
 import sqlite3
+import stat
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,7 +25,7 @@ from ..models.video_item import VideoItem
 log = logging.getLogger(__name__)
 
 
-class _StaleScan(Exception):
+class _StaleScanError(Exception):
     """Internal control flow: the scan was superseded by a newer one.
 
     Aborts the walk silently — no ``save_scan``, no emission into the void.
@@ -104,7 +105,7 @@ class Scanner(QRunnable):
                 ),
                 self._gen,
             )
-        except _StaleScan:
+        except _StaleScanError:
             log.info("scan superseded, dropping: %s", self._folder)
         except sqlite3.ProgrammingError as exc:
             # The window closed while this scan was walking, so the DB is
@@ -119,9 +120,9 @@ class Scanner(QRunnable):
     # -- internals -----------------------------------------------------------
 
     def _check_current(self) -> None:
-        """Raise :class:`_StaleScan` once a newer scan has started."""
+        """Raise :class:`_StaleScanError` once a newer scan has started."""
         if self._is_stale is not None and self._is_stale():
-            raise _StaleScan
+            raise _StaleScanError
 
     def _emit_cached(self) -> None:
         self._check_current()
@@ -143,16 +144,7 @@ class Scanner(QRunnable):
         found: list[tuple[Path, int, float]] = []
         exts = config.SUPPORTED_EXTENSIONS
         if self._recursive:
-            for dirpath, dirnames, filenames in os.walk(self._folder):
-                self._check_current()  # per-directory: cheap vs. walking one more dir
-                dirnames[:] = [d for d in dirnames if not d.startswith(".")]
-                for name in filenames:
-                    if name.startswith("."):
-                        continue
-                    if os.path.splitext(name)[1].lower() not in exts:
-                        continue
-                    self._check_current()  # cheap attribute compare vs. a stat()
-                    self._stat_into(Path(dirpath) / name, found, exts)
+            self._walk_recursive(found, exts)
         else:
             try:
                 with os.scandir(self._folder) as it:
@@ -162,18 +154,59 @@ class Scanner(QRunnable):
                         if os.path.splitext(entry.name)[1].lower() not in exts:
                             continue
                         self._check_current()
-                        self._stat_into(self._folder / entry.name, found, exts)
+                        self._stat_entry(entry, found)
             except OSError as exc:
                 raise RuntimeError(f"cannot read folder: {exc}") from exc
         found.sort(key=lambda e: e[0].name.lower())
         return found
 
+    def _walk_recursive(
+        self, found: list[tuple[Path, int, float]], exts: frozenset[str]
+    ) -> None:
+        """Depth-first ``os.scandir`` walk (instead of ``os.walk``).
+
+        Two wins over ``os.walk``: the ``DirEntry`` objects carry the stat
+        data the loop needs (on Windows the directory listing already
+        includes size/times, so a candidate file costs no extra syscall),
+        and per-directory errors stop being silent — ``os.walk`` swallows
+        them while the non-recursive path raises, so an unreadable root is
+        raised like the flat case and any other unreadable directory is
+        logged and skipped.
+        """
+        stack: list[Path] = [self._folder]
+        is_root = True
+        while stack:
+            dirpath = stack.pop()
+            self._check_current()  # per-directory: cheap vs. walking one more dir
+            try:
+                it = os.scandir(dirpath)
+            except OSError as exc:
+                if is_root:
+                    # An unreadable root must not look like an empty folder.
+                    raise RuntimeError(f"cannot read folder: {exc}") from exc
+                log.warning("skipping unreadable folder %s: %s", dirpath, exc)
+                continue
+            is_root = False
+            with it:
+                for entry in it:
+                    if entry.name.startswith("."):
+                        continue
+                    # follow_symlinks=False matches os.walk's default:
+                    # symlinked directories are neither descended nor scanned.
+                    if entry.is_dir(follow_symlinks=False):
+                        stack.append(Path(entry.path))
+                        continue
+                    if os.path.splitext(entry.name)[1].lower() not in exts:
+                        continue
+                    self._check_current()  # cheap attribute compare vs. a stat()
+                    self._stat_entry(entry, found)
+
     @staticmethod
-    def _stat_into(path: Path, out: list[tuple[Path, int, float]], exts) -> None:
+    def _stat_entry(entry: os.DirEntry, out: list[tuple[Path, int, float]]) -> None:
         try:
-            st = path.stat()
+            st = entry.stat()  # follows symlinks, like the old path.stat()
         except OSError:
             return
-        if not st.st_size:
-            return  # zero-byte files produce no usable thumbnail
-        out.append((path, st.st_size, st.st_mtime))
+        if not stat.S_ISREG(st.st_mode) or not st.st_size:
+            return  # only real, non-empty files can yield a thumbnail
+        out.append((Path(entry.path), st.st_size, st.st_mtime))

@@ -15,6 +15,7 @@ video-preview = "video_previewer.main:main"
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    "ruff>=0.6",
 ]
 
 [build-system]
@@ -27,3 +28,13 @@ packages = ["src/video_previewer"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+# Minimal on purpose: the Pyflakes/pycodestyle baseline plus exactly the
+# rule families the code already carries ``# noqa`` for (E402 late imports,
+# N802 Qt method names, BLE001 fail-soft excepts, S606 os.startfile), so the
+# directives stay enforced without forcing a whole-tree reformat.
+select = ["E4", "E7", "E9", "F", "N", "BLE001", "S606"]

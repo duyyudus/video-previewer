@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import time
 
-from PySide6.QtCore import QEvent, QModelIndex, QPoint, QRect, QSize, Qt
+from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QListView
 

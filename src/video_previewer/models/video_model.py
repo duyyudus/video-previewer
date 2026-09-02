@@ -47,7 +47,7 @@ class VideoModel(QAbstractListModel):
             return len(self._items)
         return 0
 
-    def data(self, index: QModelIndex, role: int = Qt.DisplayRole):
+    def data(self, index: QModelIndex, role: int = Qt.DisplayRole) -> object:
         if not index.isValid() or not 0 <= index.row() < len(self._items):
             return None
         item = self._items[index.row()]
@@ -69,7 +69,7 @@ class VideoModel(QAbstractListModel):
             return item.vid
         return None
 
-    def flags(self, index: QModelIndex):
+    def flags(self, index: QModelIndex) -> Qt.ItemFlag:
         return Qt.ItemIsEnabled  # not selectable: the grid is purely visual
 
     # -- Mutations (main thread only) --------------------------------------

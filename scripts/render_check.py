@@ -16,9 +16,6 @@ from pathlib import Path
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
-from PySide6.QtGui import QPalette, QColor  # noqa: E402
-
-sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from video_previewer import app as app_mod  # noqa: E402
 from video_previewer.ui.main_window import MainWindow  # noqa: E402

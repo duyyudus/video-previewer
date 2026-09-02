@@ -41,6 +41,19 @@ def _redirect_c_stderr() -> None:
             log_path.parent.mkdir(parents=True, exist_ok=True)
             log_path.touch(exist_ok=True)
             k32 = ctypes.windll.kernel32
+            # Explicit prototype: without restype=HANDLE the default c_int
+            # return truncates the 64-bit pointer, and argtypes keep the
+            # DWORD/HANDLE parameters correctly sized too.
+            k32.CreateFileW.restype = ctypes.c_void_p
+            k32.CreateFileW.argtypes = [
+                ctypes.c_wchar_p,  # lpFileName
+                ctypes.c_uint32,  # dwDesiredAccess
+                ctypes.c_uint32,  # dwShareMode
+                ctypes.c_void_p,  # lpSecurityAttributes
+                ctypes.c_uint32,  # dwCreationDisposition
+                ctypes.c_uint32,  # dwFlagsAndAttributes
+                ctypes.c_void_p,  # hTemplateFile
+            ]
             handle = k32.CreateFileW(
                 str(log_path),
                 0x40000000,  # GENERIC_WRITE
@@ -50,10 +63,18 @@ def _redirect_c_stderr() -> None:
                 0x02000000,  # FILE_FLAG_BACKUP_SEMANTICS
                 None,
             )
-            if handle in (-1, ctypes.c_void_p(-1).value):
+            # restype c_void_p: NULL arrives as None, INVALID_HANDLE_VALUE
+            # (-1) as the platform-width integer.
+            if handle is None or handle == ctypes.c_void_p(-1).value:
                 return
             fd = msvcrt.open_osfhandle(handle, os.O_APPEND | os.O_WRONLY)
-            os.dup2(fd, 2)
+            try:
+                os.dup2(fd, 2)
+            finally:
+                # The CRT fd is now redundant (fd 2 refers to the same OS
+                # handle, which _close deliberately leaves open); drop it so
+                # the descriptor table stays clean.
+                os.close(fd)
         elif os.name == "posix":
             log_path.parent.mkdir(parents=True, exist_ok=True)
             log_file = open(log_path, "ab", buffering=0)

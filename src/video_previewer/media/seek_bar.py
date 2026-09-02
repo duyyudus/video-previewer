@@ -50,7 +50,7 @@ class SeekBarOverlay(QWidget):
 
     # -- internals ------------------------------------------------------------
 
-    def eventFilter(self, obj, event) -> bool:
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
         parent = self.parentWidget()
         if obj is parent and event.type() == QEvent.Type.Resize:
             h = parent.height()
@@ -58,7 +58,7 @@ class SeekBarOverlay(QWidget):
                 self.setGeometry(0, h - self.height(), parent.width(), self.height())
         return super().eventFilter(obj, event)
 
-    def paintEvent(self, event) -> None:
+    def paintEvent(self, event) -> None:  # noqa: N802
         painter = QPainter(self)
         w, h = self.width(), self.height()
         if w <= 0:

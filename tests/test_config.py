@@ -76,6 +76,37 @@ def test_unparseable_yaml_falls_back_to_defaults(tmp_path, monkeypatch):
     assert config.SEEK_THROTTLE_MS == 33
 
 
+def test_out_of_range_values_are_clamped(tmp_path, monkeypatch, caplog):
+    # A zero concurrency would start no thumbnail job ever; a zero batch
+    # raises ValueError inside the scanner's range() batching; a ratio
+    # outside [0, 1] seeks outside the video.
+    _load(
+        tmp_path,
+        monkeypatch,
+        "thumb_concurrency: 0\n"
+        "scan_batch: 0\n"
+        "thumb_position_ratio: 2.0\n"
+        "min_cols: -3\n"
+        "max_cols: 0\n"
+        "seek_throttle_ms: -5\n",
+    )
+    assert config.THUMB_CONCURRENCY == 1
+    assert config.SCAN_BATCH == 1
+    assert config.THUMB_POSITION_RATIO == pytest.approx(1.0)
+    assert config.MIN_COLS == 1
+    assert config.MAX_COLS == 1
+    # Floor is 1, not 0: a zero throttle would disable rule 5's seek cap.
+    assert config.SEEK_THROTTLE_MS == 1
+    assert any("clamped" in r.getMessage() for r in caplog.records)
+
+
+def test_inverted_column_bounds_are_reconciled(tmp_path, monkeypatch, caplog):
+    _load(tmp_path, monkeypatch, "min_cols: 8\nmax_cols: 2\n")
+    assert config.MIN_COLS == 8
+    assert config.MAX_COLS == 8
+    assert any("max_cols" in r.getMessage() for r in caplog.records)
+
+
 def test_shipped_settings_yaml_is_sane():
     # No env override: reads <repo_root>/settings.yml.
     config.load_settings()
