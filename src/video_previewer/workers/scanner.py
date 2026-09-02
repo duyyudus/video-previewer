@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -20,6 +22,13 @@ from ..cache.database import Database
 from ..models.video_item import VideoItem
 
 log = logging.getLogger(__name__)
+
+
+class _StaleScan(Exception):
+    """Internal control flow: the scan was superseded by a newer one.
+
+    Aborts the walk silently — no ``save_scan``, no emission into the void.
+    """
 
 
 @dataclass(slots=True)
@@ -48,6 +57,7 @@ class Scanner(QRunnable):
         cache: ThumbnailCache,
         signals: ScanSignals,
         generation: int,
+        is_stale: Callable[[], bool] | None = None,
     ) -> None:
         super().__init__()
         self._folder = folder
@@ -56,13 +66,23 @@ class Scanner(QRunnable):
         self._cache = cache
         self._signals = signals
         self._gen = generation
+        # Cancellation: *is_stale* reports (thread-safely) whether a newer
+        # scan has taken over. Without it a superseded scan keeps walking +
+        # stat()-ing the old tree — minutes of wasted IO on large or
+        # network-mounted folders — before emitting into the void.
+        self._is_stale = is_stale
         self.setAutoDelete(True)
 
     @Slot()
     def run(self) -> None:
         try:
+            self._check_current()
             self._emit_cached()
             fresh = self._walk()
+            # A stale scan must not write its scan row either: the fresh scan
+            # of the same folder overwrites the key, and another folder's
+            # entry is pure waste.
+            self._check_current()
             self._db.save_scan(
                 self._db.scan_key(self._folder, self._recursive),
                 [
@@ -84,13 +104,27 @@ class Scanner(QRunnable):
                 ),
                 self._gen,
             )
+        except _StaleScan:
+            log.info("scan superseded, dropping: %s", self._folder)
+        except sqlite3.ProgrammingError as exc:
+            # The window closed while this scan was walking, so the DB is
+            # already gone: nothing the user can act on, and the UI may be
+            # half-torn down by now (the cancellation hook normally catches
+            # this before we touch the DB again).
+            log.info("scan aborted, database closing (%s): %s", exc, self._folder)
         except Exception as exc:  # noqa: BLE001 - report anything to the UI
             log.exception("scan failed for %s", self._folder)
             self._signals.error.emit(str(exc))
 
     # -- internals -----------------------------------------------------------
 
+    def _check_current(self) -> None:
+        """Raise :class:`_StaleScan` once a newer scan has started."""
+        if self._is_stale is not None and self._is_stale():
+            raise _StaleScan
+
     def _emit_cached(self) -> None:
+        self._check_current()
         entries = self._db.load_scan(self._db.scan_key(self._folder, self._recursive))
         if not entries:
             return
@@ -102,6 +136,7 @@ class Scanner(QRunnable):
                 continue
             items.append(self._cache.hydrate(item))
         if items:
+            self._check_current()  # don't hand a dead scan's items to the pool
             self._signals.items.emit(items, self._gen)
 
     def _walk(self) -> list[tuple[Path, int, float]]:
@@ -109,12 +144,14 @@ class Scanner(QRunnable):
         exts = config.SUPPORTED_EXTENSIONS
         if self._recursive:
             for dirpath, dirnames, filenames in os.walk(self._folder):
+                self._check_current()  # per-directory: cheap vs. walking one more dir
                 dirnames[:] = [d for d in dirnames if not d.startswith(".")]
                 for name in filenames:
                     if name.startswith("."):
                         continue
                     if os.path.splitext(name)[1].lower() not in exts:
                         continue
+                    self._check_current()  # cheap attribute compare vs. a stat()
                     self._stat_into(Path(dirpath) / name, found, exts)
         else:
             try:
@@ -124,6 +161,7 @@ class Scanner(QRunnable):
                             continue
                         if os.path.splitext(entry.name)[1].lower() not in exts:
                             continue
+                        self._check_current()
                         self._stat_into(self._folder / entry.name, found, exts)
             except OSError as exc:
                 raise RuntimeError(f"cannot read folder: {exc}") from exc

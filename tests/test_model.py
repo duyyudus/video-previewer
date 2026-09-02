@@ -66,3 +66,23 @@ def test_clear(model):
     model.clear()
     assert model.count() == 0
     assert model.row_for(Path("/v/a.mp4")) is None
+
+
+def test_add_items_defer_mutation_until_begin_insert_rows(model):
+    # M4: Qt's contract requires the model to be unmodified until
+    # beginInsertRows has been called; anything querying rowCount() from a
+    # rowsAboutToBeInserted handler (proxies!) must still see the old count.
+    observed: list[tuple[int, int, int]] = []
+    model.rowsAboutToBeInserted.connect(
+        lambda parent, first, last: observed.append((first, last, model.rowCount()))
+    )
+    added = model.add_items([_item("a.mp4"), _item("b.mp4")])
+    assert added == [0, 1]
+    assert observed == [(0, 1, 0)]  # rowCount() was still 0 inside the signal
+
+
+def test_add_items_dedups_within_batch(model):
+    # the same path twice in one batch adds exactly one row
+    added = model.add_items([_item("a.mp4"), _item("a.mp4")])
+    assert added == [0]
+    assert model.count() == 1

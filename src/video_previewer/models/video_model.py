@@ -78,19 +78,27 @@ class VideoModel(QAbstractListModel):
         """Append items, skipping paths already present. Returns added rows."""
         if not items:
             return []
-        start = len(self._items)
-        added: list[int] = []
+        # Stage first: Qt's contract requires the model to be unmodified
+        # until beginInsertRows has been called (a proxy/view querying
+        # rowCount() from rowsAboutToBeInserted must see consistent state).
+        fresh: list[tuple[str, VideoItem]] = []
+        seen: set[str] = set()
         for item in items:
             key = normalize_path(item.path)
-            if key in self._rows:
+            if key in self._rows or key in seen:
                 continue
+            seen.add(key)
+            fresh.append((key, item))
+        if not fresh:
+            return []
+        start = len(self._items)
+        self.beginInsertRows(QModelIndex(), start, start + len(fresh) - 1)
+        added: list[int] = []
+        for key, item in fresh:
             row = len(self._items)
             self._items.append(item)
             self._rows[key] = row
             added.append(row)
-        if not added:
-            return []
-        self.beginInsertRows(QModelIndex(), start, start + len(added) - 1)
         self.endInsertRows()
         return added
 
