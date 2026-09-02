@@ -52,6 +52,8 @@ Then click **Open Folder…** and pick a folder with videos.
 * Supported formats: `.mp4 .mkv .mov .webm .avi .m4v` (configurable in
   `settings.yml`).
 * The **Subfolders** checkbox toggles recursive scanning (remembered).
+* Double-click a tile to open that video with your default player;
+  double-clicking empty grid space opens the folder picker instead.
 * The last opened folder is restored on next launch.
 * Tunables (thumbnail size, grid metrics, timeouts, concurrency, autoplay
   delay, seek throttle, supported extensions) live in `settings.yml` in the

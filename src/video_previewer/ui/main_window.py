@@ -59,6 +59,9 @@ class MainWindow(QMainWindow):
         self._grid = VideoGrid(self._model, self)
         self._player = PreviewPlayer(self._grid.viewport(), self)
         self._grid.set_player(self._player)
+        # Double-clicking empty grid space (no video under the pointer) is a
+        # shortcut for the "Open Folder…" picker.
+        self._grid.open_folder_requested.connect(self._browse)
 
         self._thumbs = ThumbnailQueue(self._db, self._cache, self)
         self._scan_signals = ScanSignals(self)

@@ -140,7 +140,8 @@ def test_double_click_stops_hover_preview(monkeypatch, qapp, tmp_path):
     assert grid._hover_row == -1
 
 
-def test_double_click_on_empty_space_is_noop(monkeypatch, qapp, tmp_path):
+def test_double_click_on_empty_space_requests_folder_open(monkeypatch, qapp, tmp_path):
+    """Empty grid space (no video under the pointer) offers the folder picker."""
     model = VideoModel()
     model.add_items([_make_item(tmp_path)])
     grid = VideoGrid(model)
@@ -153,9 +154,91 @@ def test_double_click_on_empty_space_is_noop(monkeypatch, qapp, tmp_path):
         "video_previewer.ui.video_grid.open_externally",
         lambda path: opened.append(path) or True,
     )
+    requests = []
+    grid.open_folder_requested.connect(lambda: requests.append(1))
     # Far below/right of the single tile: empty grid space.
     _double_click(grid, QPointF(700, 550))
+    assert opened == []  # no video is opened...
+    assert requests == [1]  # ...but the folder-open action is requested
+
+
+def test_two_quick_presses_on_empty_space_request_folder_open(
+    monkeypatch, qapp, tmp_path
+):
+    """The press-based fallback must also cover empty grid space."""
+    model = VideoModel()
+    model.add_items([_make_item(tmp_path)])
+    grid = VideoGrid(model)
+    grid.resize(800, 600)
+    grid.show()
+    qapp.processEvents()
+
+    opened = []
+    monkeypatch.setattr(
+        "video_previewer.ui.video_grid.open_externally",
+        lambda path: opened.append(path) or True,
+    )
+    requests = []
+    grid.open_folder_requested.connect(lambda: requests.append(1))
+    _press(grid, QPointF(700, 550))
+    time.sleep(0.05)
+    _press(grid, QPointF(702, 550))
+    assert requests == [1]
     assert opened == []
+
+
+def test_triple_click_on_empty_space_requests_once(monkeypatch, qapp, tmp_path):
+    """A triple click delivers MouseButtonDblClick twice: request once."""
+    model = VideoModel()
+    model.add_items([_make_item(tmp_path)])
+    grid = VideoGrid(model)
+    grid.resize(800, 600)
+    grid.show()
+    qapp.processEvents()
+
+    opened = []
+    monkeypatch.setattr(
+        "video_previewer.ui.video_grid.open_externally",
+        lambda path: opened.append(path) or True,
+    )
+    requests = []
+    grid.open_folder_requested.connect(lambda: requests.append(1))
+    _double_click(grid, QPointF(700, 550))
+    _double_click(grid, QPointF(700, 550))
+    assert requests == [1]
+    assert opened == []
+
+
+def test_presses_straddling_tile_and_empty_space_do_nothing(
+    monkeypatch, qapp, tmp_path
+):
+    """A press pair must land on the same kind of target (tile or empty)."""
+    model = VideoModel()
+    model.add_items([_make_item(tmp_path)])
+    grid = VideoGrid(model)
+    grid.resize(800, 600)
+    grid.show()
+    qapp.processEvents()
+
+    opened = []
+    monkeypatch.setattr(
+        "video_previewer.ui.video_grid.open_externally",
+        lambda path: opened.append(path) or True,
+    )
+    requests = []
+    grid.open_folder_requested.connect(lambda: requests.append(1))
+    rect = grid.visualRect(model.index(0))
+    center = QPointF(rect.center())
+    empty = QPointF(700, 550)
+    _press(grid, center)
+    _press(grid, empty)  # tile -> empty: neither gesture completes
+    assert opened == []
+    assert requests == []
+    time.sleep((grid._dbl_interval_ms() + 100) / 1000)  # start a fresh gesture
+    _press(grid, empty)
+    _press(grid, center)  # empty -> tile: ditto
+    assert opened == []
+    assert requests == []
 
 
 def test_two_quick_presses_open_without_qt_dblclick(monkeypatch, qapp, tmp_path):

@@ -52,6 +52,35 @@ def test_open_folder_resets_stale_hover_state(qapp, cache_dir, tmp_path):
         win.close()
 
 
+def test_empty_space_double_click_opens_folder_picker(qapp, cache_dir, tmp_path,
+                                                      monkeypatch):
+    # Double-clicking empty grid space (no video under the pointer) offers
+    # the folder picker, and the picked folder is opened for scanning.
+    folder = _dummy_folder(tmp_path)
+    monkeypatch.setattr(
+        "video_previewer.ui.main_window.QFileDialog.getExistingDirectory",
+        lambda *args, **kwargs: str(folder),
+    )
+    win = MainWindow()
+    win.show()
+    try:
+        for _ in range(3):
+            qapp.processEvents()
+        event = QMouseEvent(
+            QEvent.Type.MouseButtonDblClick,
+            QPointF(30, 30),
+            QPointF(30, 30),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        win.grid.mouseDoubleClickEvent(event)  # empty model: every spot is empty
+        assert pump(qapp, lambda: win.model.count() == 2, timeout=30)
+        assert win._folder_label.text() == str(folder)
+    finally:
+        win.close()
+
+
 def test_closing_window_ignores_late_mutations(qapp, cache_dir, tmp_path):
     # M5: the closeEvent drain loop keeps the event queue running, so a
     # queued click or late scan result could mutate state mid-close. Once

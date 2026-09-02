@@ -4,13 +4,17 @@ Pointer handling (via an event filter on the viewport) maps each tile to:
   * enter  -> start hover preview (muted autoplay after a short delay)
   * move   -> horizontal position scrubs the shared player (throttled)
   * leave  -> stop the player, restore the static thumbnail
+
+A double-click opens the tile's video with the OS-default player; on empty
+grid space (no video under the pointer) it emits ``open_folder_requested``
+so the window can offer its folder picker.
 """
 
 from __future__ import annotations
 
 import time
 
-from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt
+from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QListView
 
@@ -22,6 +26,10 @@ from .video_delegate import VideoDelegate, cell_height
 
 
 class VideoGrid(QListView):
+    #: Emitted when the user double-clicks empty grid space (no video tile
+    #: under the pointer); the window opens its folder picker in response.
+    open_folder_requested = Signal()
+
     def __init__(self, model: VideoModel, parent=None) -> None:
         super().__init__(parent)
         self.setModel(model)
@@ -40,6 +48,7 @@ class VideoGrid(QListView):
         # can reset the OS click detection between the two clicks.
         self._last_press: tuple[int, QPoint, float] | None = None  # (row, pos, time)
         self._last_open: tuple[int, float] | None = None  # (row, time)
+        self._last_folder_open: float | None = None  # empty-space request
 
         self.setViewMode(QListView.ViewMode.IconMode)
         self.setResizeMode(QListView.ResizeMode.Adjust)
@@ -74,6 +83,7 @@ class VideoGrid(QListView):
         self._clear_hover()
         self._last_press = None
         self._last_open = None
+        self._last_folder_open = None
 
     def set_closing(self) -> None:
         """Stop reacting to the pointer for good (the window is closing).
@@ -133,7 +143,7 @@ class VideoGrid(QListView):
             return
         index = self.indexAt(event.position().toPoint())
         if not index.isValid():
-            super().mouseDoubleClickEvent(event)
+            self._request_open_folder()
             return
         self._open_item(index.row())
 
@@ -146,21 +156,26 @@ class VideoGrid(QListView):
         Qt's MouseButtonDblClick synthesis can miss the second click (the
         native video widget appearing under the cursor resets the OS click
         sequence), so a same-tile press pair within the OS double-click
-        interval and drift opens the video directly.
+        interval and drift opens the video directly. The same pair on empty
+        grid space (no video under the pointer) requests the folder picker
+        instead.
         """
         index = self.indexAt(pos)
         row = index.row() if index.isValid() else -1
         now = time.monotonic()
         prev = self._last_press
         self._last_press = (row, pos, now)
-        if row < 0 or prev is None or prev[0] != row:
+        if prev is None or prev[0] != row:
             return
         if (now - prev[2]) * 1000 > self._dbl_interval_ms():
             return
         if (pos - prev[1]).manhattanLength() > config.DOUBLE_CLICK_MAX_DIST:
             return
         self._last_press = None
-        self._open_item(row)
+        if row < 0:
+            self._request_open_folder()
+        else:
+            self._open_item(row)
 
     def _open_item(self, row: int) -> None:
         """Open the video at *row* with the OS-default player (once)."""
@@ -180,6 +195,20 @@ class VideoGrid(QListView):
         self._last_open = (row, now)
         self._clear_hover()  # stop the inline preview before handing off
         open_externally(item.path)
+
+    def _request_open_folder(self) -> None:
+        """Empty-space double-click: ask the window to open a folder (once)."""
+        # Same per-gesture dedupe as ``_open_item``: a triple click delivers
+        # MouseButtonDblClick twice (and the press-based path can race it).
+        now = time.monotonic()
+        last = self._last_folder_open
+        if (
+            last is not None
+            and (now - last) * 1000 <= 2 * self._dbl_interval_ms()
+        ):
+            return
+        self._last_folder_open = now
+        self.open_folder_requested.emit()
 
     def _on_pointer_move(self, pos: QPoint) -> None:
         if self._player is None:
