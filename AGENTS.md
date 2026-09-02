@@ -22,6 +22,11 @@ uv run python scripts/render_check.py   # offscreen smoke check; writes
                                         # scripts/screenshot-offscreen.png
 ```
 
+- **Always go through the project venv.** Prefer the venv interpreter directly
+  (`.venv\Scripts\python.exe -m pytest`, `.venv\Scripts\video-preview.exe`)
+  over bare `uv run`/`uvx` — `uv` may touch caches outside the workspace and
+  get blocked in sandboxed shells, while the venv lives inside the repo.
+
 - FFmpeg is a hard runtime requirement (thumbnails, metadata). Pipeline tests
   are **skipped** when `ffmpeg`/`ffprobe` are missing — a green run with many
   skips may mean ffmpeg is not installed.
