@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import QCoreApplication, QSettings, QStandardPaths, Qt, QThreadPool
@@ -58,6 +59,10 @@ class MainWindow(QMainWindow):
         self._thumbs = ThumbnailQueue(self._db, self._cache, self)
         self._scan_signals = ScanSignals(self)
         self._scan_gen = 0
+        # Set at the start of closeEvent: while the window is closing, the
+        # drain loop still runs the event queue, and mutations coming in
+        # through queued events (clicks, late scan results) must be no-ops.
+        self._closing = False
         self._scan_signals.items.connect(self._on_scan_items)
         self._scan_signals.finished.connect(self._on_scan_finished)
         self._scan_signals.error.connect(self._on_scan_error)
@@ -108,6 +113,8 @@ class MainWindow(QMainWindow):
     # -- folder selection ------------------------------------------------------------
 
     def _browse(self) -> None:
+        if self._closing:
+            return
         start = str(self._current_folder or
                     QStandardPaths.writableLocation(QStandardPaths.HomeLocation))
         folder = QFileDialog.getExistingDirectory(
@@ -117,7 +124,10 @@ class MainWindow(QMainWindow):
             self._open_folder(Path(folder))
 
     def _open_folder(self, folder: Path) -> None:
+        if self._closing:
+            return
         self._scan_gen += 1  # invalidate any in-flight scan of another folder
+        gen = self._scan_gen
         self._current_folder = folder
         self._folder_label.setText(str(folder))
         self._folder_label.setToolTip(str(folder))
@@ -125,16 +135,29 @@ class MainWindow(QMainWindow):
         self._settings.setValue(config.SETTING_RECURSIVE, self._recursive_chk.isChecked())
 
         self._player.leave()
+        self._grid.clear_hover()  # model resets; cursor tile must not stay "hovered"
         self._model.clear()
+        self._thumbs.clear_pending()  # abandoned folder's queued jobs never start
         self._grid.delegate().clear_pixmap_cache()
         self._update_status()
 
         scanner = Scanner(
             folder, self._recursive_chk.isChecked(), self._db, self._cache,
-            self._scan_signals, self._scan_gen,
+            self._scan_signals, gen,
+            is_stale=self._scan_stale(gen),
         )
         QThreadPool.globalInstance().start(scanner)
         log.info("scanning %s (recursive=%s)", folder, self._recursive_chk.isChecked())
+
+    def _scan_stale(self, generation: int) -> Callable[[], bool]:
+        """Cancellation hook polled by a scan of *generation*'s worker thread.
+
+        The scan is obsolete once a newer one has taken over *or* the window
+        starts closing (otherwise it outlives the database it writes to and
+        keeps stat()-ing the tree during teardown). Plain attribute reads
+        only: no Qt state is touched off the GUI thread.
+        """
+        return lambda: generation != self._scan_gen or self._closing
 
     def _on_recursive_toggled(self, checked: bool) -> None:
         self._settings.setValue(config.SETTING_RECURSIVE, checked)
@@ -144,8 +167,8 @@ class MainWindow(QMainWindow):
     # -- scanner results (main thread, queued from worker) -----------------------------
 
     def _on_scan_items(self, items: list[VideoItem], gen: int) -> None:
-        if gen != self._scan_gen:
-            return  # a newer folder scan is in progress; drop stale results
+        if gen != self._scan_gen or self._closing:
+            return  # stale scan, or the window is draining for close
         to_add: list[VideoItem] = []
         to_update: list[tuple[int, VideoItem]] = []
         for item in items:
@@ -169,7 +192,7 @@ class MainWindow(QMainWindow):
         self._update_status()
 
     def _on_scan_finished(self, result: ScanResult, gen: int) -> None:
-        if gen != self._scan_gen:
+        if gen != self._scan_gen or self._closing:
             return
         removed = self._cache.purge_folder(result.folder, result.fresh)
         if removed:
@@ -177,6 +200,8 @@ class MainWindow(QMainWindow):
         self._update_status()
 
     def _on_scan_error(self, message: str) -> None:
+        if self._closing:
+            return  # a dying scan's error is not something the user can act on
         self._status_label.setText(f"Scan failed: {message}")
 
     def _update_status(self) -> None:
@@ -186,6 +211,8 @@ class MainWindow(QMainWindow):
     # -- thumbnail results --------------------------------------------------------------
 
     def _on_thumb_ready(self, item: VideoItem) -> None:
+        if self._closing:
+            return  # no model mutation while the window drains for close
         row = self._model.row_for(item.path)
         if row is None:
             return
@@ -200,15 +227,27 @@ class MainWindow(QMainWindow):
     # -- shutdown ------------------------------------------------------------------------
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        # Re-entrancy guard: the drain loop below keeps processing the event
+        # queue, so from here on every mutation reachable through a queued
+        # event (_browse, _open_folder, late scan results/errors, thumb
+        # updates, and every pointer gesture in the grid) is a no-op. Nothing
+        # can start new workers or change the model mid-close.
+        self._closing = True
         folder = self._current_folder
         # Ask before draining so the user is not kept waiting for workers.
         keep = folder is None or exit_dialog.ask_keep_on_exit(
             self, folder, self._model.count()
         )
         self._player.leave()
+        # The window is still on screen while we pump events: make the grid
+        # stop answering the pointer so a stray hover cannot restart the
+        # player we just stopped, nor a press pair launch an external player.
+        self._grid.set_closing()
         # Let in-flight worker jobs (probing/thumbnailing) drain so they do
         # not race the database close. Bounded so closing stays snappy; the
-        # database fails soft for anything that still lingers.
+        # database fails soft for anything that still lingers. processEvents
+        # is safe here because _closing turns every queued mutation into a
+        # no-op; the sleep only caps the spin between event pumps.
         deadline = time.time() + 5.0
         while self._thumbs.pending_count() > 0 and time.time() < deadline:
             QCoreApplication.processEvents()

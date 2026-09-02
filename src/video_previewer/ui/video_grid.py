@@ -30,6 +30,10 @@ class VideoGrid(QListView):
         self._delegate = VideoDelegate(self)
         self.setItemDelegate(self._delegate)
         self._hover_row: int = -1
+        # Set while the window is tearing down: ``closeEvent`` keeps pumping
+        # the event queue (to let workers drain) with the window still on
+        # screen, and a stray hover/press there must stay inert.
+        self._closing = False
         # Double-click-to-open state. Detected from consecutive presses
         # because Qt's own MouseButtonDblClick synthesis is unreliable here:
         # the native QVideoWidget window showing under the cursor mid-sequence
@@ -58,6 +62,28 @@ class VideoGrid(QListView):
 
     def delegate(self) -> VideoDelegate:
         return self._delegate
+
+    def clear_hover(self) -> None:
+        """Forget all pointer state and stop any preview.
+
+        Call when the model content changes wholesale (folder switch): the
+        row index under the cursor may be reused by a *different* item, and
+        without the reset ``_on_pointer_move`` sees ``row == _hover_row``
+        and skips ``enter()``, leaving the tile under the pointer dead.
+        """
+        self._clear_hover()
+        self._last_press = None
+        self._last_open = None
+
+    def set_closing(self) -> None:
+        """Stop reacting to the pointer for good (the window is closing).
+
+        Without this, the drain loop in ``closeEvent`` can deliver a hover
+        that restarts the shared player right after shutdown stopped it, or a
+        press pair that launches an external player mid-close.
+        """
+        self._closing = True
+        self.clear_hover()
 
     # -- responsive layout ---------------------------------------------------------
 
@@ -90,7 +116,7 @@ class VideoGrid(QListView):
     # -- pointer handling -------------------------------------------------------------
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
-        if obj is self.viewport():
+        if obj is self.viewport() and not self._closing:
             etype = event.type()
             if etype == QEvent.Type.MouseMove:
                 self._on_pointer_move(event.position().toPoint())
@@ -102,6 +128,9 @@ class VideoGrid(QListView):
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
         # Qt's own double-click delivery (kept for the cases where it works).
+        if self._closing:
+            event.ignore()
+            return
         index = self.indexAt(event.position().toPoint())
         if not index.isValid():
             super().mouseDoubleClickEvent(event)
