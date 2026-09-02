@@ -34,6 +34,42 @@ def test_video_item_roundtrip():
     assert item.vid == item2.vid
 
 
+def test_vid_is_memoized_per_instance(monkeypatch):
+    # M1: vid used to recompute sha1 on every access; scan-time dedup on a
+    # 10k folder made that quadratic on the GUI thread. The identity inputs
+    # (path|size|mtime) never change on a live instance, so it is computed
+    # at most once per item.
+    from dataclasses import replace
+
+    import video_previewer.models.video_item as vi_mod
+
+    calls: list = []
+    real = vi_mod.video_id
+
+    def counting(path, size, modified):
+        calls.append((path, size, modified))
+        return real(path, size, modified)
+
+    monkeypatch.setattr(vi_mod, "video_id", counting)
+    item = vi_mod.VideoItem(Path("/v/a.mp4"), 10, 1.0)
+    first = item.vid
+    assert item.vid == first and item.vid == first
+    assert len(calls) == 1  # memoized after the first access
+
+    # Metadata and thumbnails are not part of a file's identity, so the derived
+    # copies on the hydrate / thumb-ready paths carry the memo (that path runs
+    # once per file for a whole folder).
+    derived = item.with_metadata(1000, 320, 180).with_thumbnail(Path("/t.jpg"))
+    assert derived.vid == first
+    assert calls == [(item.path, 10, 1.0)]  # not a single rehash
+
+    # A genuinely different identity (replace() bypassing the with_* helpers)
+    # still hashes fresh.
+    changed = replace(item, size=99)
+    assert changed.vid != first
+    assert len(calls) == 2
+
+
 def test_normalize_path_case_on_windows():
     p = Path("C:/Videos/Movie.mp4")
     if platform.system() == "Windows":

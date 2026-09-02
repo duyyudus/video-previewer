@@ -12,10 +12,15 @@ from pathlib import Path
 
 import pytest
 
+from video_previewer import config
 from video_previewer.cache.cache import ThumbnailCache
 from video_previewer.cache.database import Database
 from video_previewer.models.video_item import VideoItem
-from video_previewer.workers.thumbnail_worker import ThumbSignals, _ThumbJob
+from video_previewer.workers.thumbnail_worker import (
+    ThumbnailQueue,
+    ThumbSignals,
+    _ThumbJob,
+)
 
 
 @pytest.fixture
@@ -51,3 +56,31 @@ def test_job_done_emitted_when_db_closed(qapp, cache_dir, db):
     _ThumbJob(item, db, cache, signals).run()
 
     assert done == [item.vid]
+
+
+# -- queue bookkeeping (audit M2: dict-keyed pending, clear_pending) ----------
+
+
+def test_queue_dedups_pending_and_clears_on_demand(qapp, cache_dir, monkeypatch):
+    # Concurrency 0 keeps every request pending so the bookkeeping can be
+    # observed without running real ffmpeg jobs.
+    monkeypatch.setattr(config, "THUMB_CONCURRENCY", 0)
+    db = Database(cache_dir / "metadata.sqlite")
+    cache = ThumbnailCache(db)
+    q = ThumbnailQueue(db, cache)
+
+    a = VideoItem(Path("/v/a.mp4"), 10, 1.0)
+    b = VideoItem(Path("/v/b.mp4"), 20, 2.0)
+    q.request(a)
+    q.request(b)
+    q.request(VideoItem(Path("/v/a.mp4"), 10, 1.0))  # same vid -> deduped
+    assert q.pending_count() == 2
+
+    q.request(a.with_thumbnail(Path("/t/a.jpg")))  # thumb_ready -> ignored
+    assert q.pending_count() == 2
+
+    q.clear_pending()  # folder switch: queued work for the old folder is dropped
+    assert q.pending_count() == 0
+    q.request(a)  # the queue keeps working afterwards
+    assert q.pending_count() == 1
+    db.close()

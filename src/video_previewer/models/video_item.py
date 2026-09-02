@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import platform
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 _SYSTEM = platform.system()
@@ -45,6 +45,12 @@ class VideoItem:
     vcodec: str | None = None
     thumbnail_path: Path | None = None
     thumb_ready: bool = False
+    # Memoized cache identity (not part of init/equality/repr). The identity
+    # inputs (path|size|mtime) never change on a live instance — ``with_*``
+    # produce replacements — so sha1 is computed at most once per item
+    # instead of on every ``vid`` access (scan-time dedup touches it O(n)
+    # times per item).
+    _vid: str = field(init=False, repr=False, compare=False, default="")
 
     @property
     def filename(self) -> str:
@@ -52,7 +58,9 @@ class VideoItem:
 
     @property
     def vid(self) -> str:
-        return video_id(self.path, self.size, self.modified)
+        if not self._vid:
+            self._vid = video_id(self.path, self.size, self.modified)
+        return self._vid
 
     def with_metadata(
         self,
@@ -61,13 +69,25 @@ class VideoItem:
         height: int | None,
         vcodec: str | None = None,
     ) -> "VideoItem":
-        return replace(
+        return self._carry(replace(
             self,
             duration_ms=duration_ms,
             width=width,
             height=height,
             vcodec=vcodec,
-        )
+        ))
 
     def with_thumbnail(self, path: Path) -> "VideoItem":
-        return replace(self, thumbnail_path=path, thumb_ready=True)
+        return self._carry(replace(self, thumbnail_path=path, thumb_ready=True))
+
+    def _carry(self, new: "VideoItem") -> "VideoItem":
+        """Copy the memoized identity into *new*.
+
+        Neither metadata nor the thumbnail is part of a file's identity
+        (``path|size|mtime`` only), so a replacement derived from ``self``
+        keeps the same ``vid`` and must not rehash — these copies run once per
+        file on the hydrate and thumb-ready paths, i.e. thousands of times per
+        folder.
+        """
+        new._vid = self._vid
+        return new

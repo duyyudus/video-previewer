@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from collections import deque
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, Slot
@@ -103,7 +102,10 @@ class ThumbnailQueue(QObject):
         self._cache = cache
         self._pool = QThreadPool.globalInstance()
         self._signals = ThumbSignals(self)
-        self._pending: deque[VideoItem] = deque()
+        # vid -> item, in insertion order. Dict-keyed so request() dedup is
+        # O(1): scanning/hydrating a 10k-folder used to linear-scan a deque
+        # while recomputing each pending item's sha1 — O(n²) on the GUI thread.
+        self._pending: dict[str, VideoItem] = {}
         self._inflight: set[str] = set()
         self.signals = self._signals
         # job_done is emitted from worker threads; the connection is queued
@@ -115,13 +117,19 @@ class ThumbnailQueue(QObject):
     def request(self, item: VideoItem) -> None:
         if item.thumb_ready:
             return
-        if item.vid in self._inflight:
+        vid = item.vid
+        if vid in self._inflight or vid in self._pending:
             return
-        for queued in self._pending:
-            if queued.vid == item.vid:
-                return
-        self._pending.append(item)
+        self._pending[vid] = item
         self._pump()
+
+    def clear_pending(self) -> None:
+        """Drop queued-but-not-yet-started jobs (folder switch).
+
+        In-flight jobs are left alone — they must finish to return their
+        slot — but work for the abandoned folder never starts.
+        """
+        self._pending.clear()
 
     def pending_count(self) -> int:
         """Jobs still queued or in flight (used to drain before shutdown)."""
@@ -135,10 +143,13 @@ class ThumbnailQueue(QObject):
 
     def _pump(self) -> None:
         while self._pending and len(self._inflight) < config.THUMB_CONCURRENCY:
-            item = self._pending.popleft()
-            if item.vid in self._inflight:
+            # FIFO: dicts keep insertion order; plain dict.popitem() has no
+            # ``last`` kwarg, so take the first key explicitly.
+            vid = next(iter(self._pending))
+            item = self._pending.pop(vid)
+            if vid in self._inflight:
                 continue
-            self._inflight.add(item.vid)
+            self._inflight.add(vid)
             self._pool.start(
                 _ThumbJob(item, self._db, self._cache, self._signals)
             )
