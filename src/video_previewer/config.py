@@ -29,6 +29,8 @@ ORG_NAME = "video-previewer"
 SETTING_LAST_FOLDER = "last_folder"
 SETTING_RECURSIVE = "recursive"
 SETTING_WINDOW_GEOMETRY = "window_geometry"
+SETTING_SIDEBAR_VISIBLE = "sidebar_visible"
+SETTING_SIDEBAR_SPLITTER = "sidebar_splitter_state"
 
 # --- settings.yml -------------------------------------------------------------
 
@@ -66,6 +68,8 @@ DEFAULTS: dict[str, Any] = {
     # Main window: fallback size (px) when no remembered geometry exists.
     "default_window_width": 1280,
     "default_window_height": 800,
+    # Folder sidebar: initial width (px) before any remembered splitter state.
+    "sidebar_width": 260,
 }
 
 # Repo-checkout assumption: config.py lives at <root>/src/video_previewer/,
@@ -98,6 +102,7 @@ SEEK_THROTTLE_MS: int
 DOUBLE_CLICK_MAX_DIST: int
 DEFAULT_WINDOW_WIDTH: int
 DEFAULT_WINDOW_HEIGHT: int
+SIDEBAR_WIDTH: int
 
 
 def settings_path() -> Path:
@@ -209,7 +214,7 @@ def load_settings() -> None:
     global THUMB_CONCURRENCY, SCAN_BATCH, CELL_WIDTH, CELL_ASPECT
     global FILENAME_ROW, GRID_SPACING, MIN_COLS, MAX_COLS
     global AUTOPLAY_DELAY_MS, SEEK_THROTTLE_MS, DOUBLE_CLICK_MAX_DIST
-    global DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT
+    global DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT, SIDEBAR_WIDTH
 
     _settings_data.clear()
     _settings_data.update(_read_settings_file())
@@ -244,6 +249,7 @@ def load_settings() -> None:
     DOUBLE_CLICK_MAX_DIST = _num("double_click_max_dist", int, minimum=0)
     DEFAULT_WINDOW_WIDTH = _num("default_window_width", int, minimum=200)
     DEFAULT_WINDOW_HEIGHT = _num("default_window_height", int, minimum=200)
+    SIDEBAR_WIDTH = _num("sidebar_width", int, minimum=120)
 
 
 load_settings()

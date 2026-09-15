@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QPushButton,
+    QSplitter,
     QVBoxLayout,
     QWidget,
 )
@@ -32,6 +33,7 @@ from ..media.player import PreviewPlayer
 from ..models.video_item import VideoItem
 from ..models.video_model import VideoModel
 from ..ui import exit_dialog
+from ..ui.folder_sidebar import FolderSidebar
 from ..ui.video_grid import VideoGrid
 from ..workers.scanner import ScanResult, ScanSignals, Scanner
 from ..workers.thumbnail_worker import ThumbnailQueue
@@ -62,6 +64,10 @@ class MainWindow(QMainWindow):
         # Double-clicking empty grid space (no video under the pointer) is a
         # shortcut for the "Open Folder…" picker.
         self._grid.open_folder_requested.connect(self._browse)
+        # The sidebar tree is created here too: its double-click loads a
+        # folder into the grid through the same funnel as the picker.
+        self._sidebar = FolderSidebar(self)
+        self._sidebar.folder_activated.connect(self._on_sidebar_folder_activated)
 
         self._thumbs = ThumbnailQueue(self._db, self._cache, self)
         self._scan_signals = ScanSignals(self)
@@ -88,6 +94,9 @@ class MainWindow(QMainWindow):
         self._browse_btn = QPushButton("Open Folder\u2026", self)
         self._browse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._browse_btn.clicked.connect(self._browse)
+        self._sidebar_btn = QPushButton("Sidebar", self)
+        self._sidebar_btn.setCheckable(True)
+        self._sidebar_btn.toggled.connect(self._on_sidebar_toggled)
         self._folder_label = QLabel("No folder selected", self)
         self._folder_label.setToolTip("Currently scanned folder")
         self._recursive_chk = QCheckBox("Subfolders", self)
@@ -95,13 +104,23 @@ class MainWindow(QMainWindow):
         self._status_label = QLabel("", self)
         self._status_label.setStyleSheet("color: #9a9aa5;")
         bar.addWidget(self._browse_btn)
+        bar.addWidget(self._sidebar_btn)
         bar.addWidget(self._folder_label, 0, Qt.AlignmentFlag.AlignVCenter)
         bar.addStretch(1)
         bar.addWidget(self._recursive_chk)
         bar.addWidget(self._status_label, 0, Qt.AlignmentFlag.AlignVCenter)
 
         vbox.addLayout(bar)
-        vbox.addWidget(self._grid, 1)
+        # Sidebar + grid share the content area: the grid absorbs any extra
+        # width, and dragging the handle can never collapse the tree to zero
+        # (hiding it is the toggle button's job, not the splitter's).
+        self._splitter = QSplitter(Qt.Orientation.Horizontal, self)
+        self._splitter.setChildrenCollapsible(False)
+        self._splitter.addWidget(self._sidebar)
+        self._splitter.addWidget(self._grid)
+        self._splitter.setStretchFactor(0, 0)
+        self._splitter.setStretchFactor(1, 1)
+        vbox.addWidget(self._splitter, 1)
         self.setCentralWidget(central)
 
         unavailable: list[str] = []
@@ -119,6 +138,22 @@ class MainWindow(QMainWindow):
         geometry = self._settings.value(config.SETTING_WINDOW_GEOMETRY)
         if geometry:
             self.restoreGeometry(geometry)
+
+        # Sidebar visibility and split sizes. restoreState ignores a corrupt
+        # or mismatched blob (fail soft), leaving the configured default.
+        visible = self._settings.value(config.SETTING_SIDEBAR_VISIBLE, True, type=bool)
+        # setVisible directly: setChecked only fires `toggled` on a state
+        # *change*, so a persisted "hidden" (the button's default) would
+        # never reach the sidebar otherwise.
+        self._sidebar_btn.setChecked(visible)
+        self._sidebar.setVisible(visible)
+        state = self._settings.value(config.SETTING_SIDEBAR_SPLITTER)
+        if state:
+            self._splitter.restoreState(state)
+        else:
+            # First run: sidebar at its configured width; the grid's stretch
+            # factor soaks up everything else.
+            self._splitter.setSizes([config.SIDEBAR_WIDTH, 1])
 
         # Restore the last opened folder (if it still exists).
         last = self._settings.value(config.SETTING_LAST_FOLDER)
@@ -151,6 +186,7 @@ class MainWindow(QMainWindow):
         self._current_folder = folder
         self._folder_label.setText(str(folder))
         self._folder_label.setToolTip(str(folder))
+        self._sidebar.select_path(folder)  # reveal it in the tree
         self._settings.setValue(config.SETTING_LAST_FOLDER, str(folder))
         self._settings.setValue(config.SETTING_RECURSIVE, self._recursive_chk.isChecked())
 
@@ -183,6 +219,16 @@ class MainWindow(QMainWindow):
         self._settings.setValue(config.SETTING_RECURSIVE, checked)
         if self._current_folder is not None:
             self._open_folder(self._current_folder)
+
+    # -- sidebar -----------------------------------------------------------------------
+
+    def _on_sidebar_toggled(self, visible: bool) -> None:
+        self._sidebar.setVisible(visible)
+        self._settings.setValue(config.SETTING_SIDEBAR_VISIBLE, visible)
+
+    def _on_sidebar_folder_activated(self, path: str) -> None:
+        """Load the double-clicked sidebar folder through the shared funnel."""
+        self._open_folder(Path(path))
 
     # -- scanner results (main thread, queued from worker) -----------------------------
 
@@ -253,9 +299,13 @@ class MainWindow(QMainWindow):
         # updates, and every pointer gesture in the grid) is a no-op. Nothing
         # can start new workers or change the model mid-close.
         self._closing = True
-        # Remember the window geometry no matter what the exit dialog decides
-        # below; sync now so it is on disk even if teardown hits a snag.
+        # Remember the window geometry + sidebar split no matter what the exit
+        # dialog decides below; sync now so it is on disk even if teardown
+        # hits a snag.
         self._settings.setValue(config.SETTING_WINDOW_GEOMETRY, self.saveGeometry())
+        self._settings.setValue(
+            config.SETTING_SIDEBAR_SPLITTER, self._splitter.saveState()
+        )
         self._settings.sync()
         folder = self._current_folder
         # Ask before draining so the user is not kept waiting for workers.
@@ -314,3 +364,7 @@ class MainWindow(QMainWindow):
     @property
     def player(self) -> PreviewPlayer:
         return self._player
+
+    @property
+    def sidebar(self) -> FolderSidebar:
+        return self._sidebar

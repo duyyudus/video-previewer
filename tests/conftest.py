@@ -52,6 +52,8 @@ def _clean_settings(qapp):
     s.remove(config.SETTING_LAST_FOLDER)
     s.remove(config.SETTING_RECURSIVE)
     s.remove(config.SETTING_WINDOW_GEOMETRY)
+    s.remove(config.SETTING_SIDEBAR_VISIBLE)
+    s.remove(config.SETTING_SIDEBAR_SPLITTER)
     yield
     s.sync()
 

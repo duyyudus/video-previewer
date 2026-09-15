@@ -49,6 +49,8 @@ src/video_previewer/
 │   ├── main_window.py # MainWindow: folder selection, state, exit dialog
 │   ├── video_grid.py  # VideoGrid (QListView) + responsive column layout
 │   ├── video_delegate.py  # tile painting (thumbnail + filename), hover/scrub
+│   ├── folder_sidebar.py  # folder tree sidebar (QTreeView + QFileSystemModel);
+│   │                  #   double-click loads a folder, single click never does
 │   └── exit_dialog.py # keep/discard prompt on close
 ├── models/
 │   ├── video_item.py  # VideoItem dataclass; video_id() = sha1(path|size|mtime)
@@ -119,7 +121,8 @@ scripts/render_check.py
   `as_posix()` forms are what get stored in SQLite; `video_id()` derivation
   must stay stable or the cache silently invalidates.
 - Platform notes: the exit prompt (`exit_dialog.ask_keep_on_exit`) guards
-  `closeEvent`; the last folder + recursive toggle persist via `QSettings`.
+  `closeEvent`; the last folder + recursive toggle persist via `QSettings`,
+  as do the sidebar toggle and its split width.
 
 ## Commit messages
 
