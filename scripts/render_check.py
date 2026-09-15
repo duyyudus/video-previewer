@@ -15,6 +15,7 @@ from pathlib import Path
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
+from PySide6.QtCore import QSettings  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from video_previewer import app as app_mod  # noqa: E402
@@ -90,6 +91,11 @@ def main() -> None:
     ok = win.grab().save(str(out))
     print(f"screenshot saved: {out} ({ok})")
     win.close()
+    # closeEvent persists the window geometry under the real app identity;
+    # this throwaway offscreen run must not overwrite the user's real
+    # remembered size with its own 1440x900.
+    QSettings().remove(config.SETTING_WINDOW_GEOMETRY)
+    QSettings().sync()
 
 
 if __name__ == "__main__":

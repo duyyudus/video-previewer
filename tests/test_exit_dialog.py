@@ -36,26 +36,6 @@ def db(cache_dir):
     d.close()
 
 
-@pytest.fixture
-def file_settings(tmp_path, monkeypatch):
-    """Point MainWindow's QSettings at a file (INI format).
-
-    The DSH file sandbox silently blocks QSettings persistence in the native
-    (registry) format, so the close-behavior tests run against a file-backed
-    settings store instead (works everywhere, readable from fresh instances).
-    """
-    from video_previewer.ui import main_window as main_window_mod
-
-    path = str(tmp_path / "settings.ini")
-
-    class FileSettings(QSettings):
-        def __init__(self) -> None:
-            super().__init__(path, QSettings.Format.IniFormat)
-
-    monkeypatch.setattr(main_window_mod, "QSettings", FileSettings)
-    return path
-
-
 def _read_settings(path: str) -> QSettings:
     return QSettings(path, QSettings.Format.IniFormat)
 

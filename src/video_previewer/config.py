@@ -25,9 +25,10 @@ log = logging.getLogger(__name__)
 APP_NAME = "Video Previewer"
 ORG_NAME = "video-previewer"
 
-# Folder-scanning settings (persisted via QSettings)
+# Settings persisted via QSettings
 SETTING_LAST_FOLDER = "last_folder"
 SETTING_RECURSIVE = "recursive"
+SETTING_WINDOW_GEOMETRY = "window_geometry"
 
 # --- settings.yml -------------------------------------------------------------
 
@@ -62,6 +63,9 @@ DEFAULTS: dict[str, Any] = {
     # Double-click-to-open: maximum pointer drift between the two presses
     # (px, Manhattan length). The timing window comes from the OS.
     "double_click_max_dist": 10,
+    # Main window: fallback size (px) when no remembered geometry exists.
+    "default_window_width": 1280,
+    "default_window_height": 800,
 }
 
 # Repo-checkout assumption: config.py lives at <root>/src/video_previewer/,
@@ -92,6 +96,8 @@ MAX_COLS: int
 AUTOPLAY_DELAY_MS: int
 SEEK_THROTTLE_MS: int
 DOUBLE_CLICK_MAX_DIST: int
+DEFAULT_WINDOW_WIDTH: int
+DEFAULT_WINDOW_HEIGHT: int
 
 
 def settings_path() -> Path:
@@ -203,6 +209,7 @@ def load_settings() -> None:
     global THUMB_CONCURRENCY, SCAN_BATCH, CELL_WIDTH, CELL_ASPECT
     global FILENAME_ROW, GRID_SPACING, MIN_COLS, MAX_COLS
     global AUTOPLAY_DELAY_MS, SEEK_THROTTLE_MS, DOUBLE_CLICK_MAX_DIST
+    global DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT
 
     _settings_data.clear()
     _settings_data.update(_read_settings_file())
@@ -235,6 +242,8 @@ def load_settings() -> None:
     # scrubbing at ~30 setPosition/s), so it is clamped rather than allowed.
     SEEK_THROTTLE_MS = _num("seek_throttle_ms", int, minimum=1)
     DOUBLE_CLICK_MAX_DIST = _num("double_click_max_dist", int, minimum=0)
+    DEFAULT_WINDOW_WIDTH = _num("default_window_width", int, minimum=200)
+    DEFAULT_WINDOW_HEIGHT = _num("default_window_height", int, minimum=200)
 
 
 load_settings()

@@ -59,3 +59,9 @@ seek_throttle_ms: 33
 # Double-click-to-open: maximum pointer drift between the two presses, in
 # pixels. The timing window is the OS double-click interval.
 double_click_max_dist: 10
+
+# --- Main window --------------------------------------------------------------
+# Fallback window size in pixels, used when nothing was remembered from the
+# previous run (a remembered size/position wins over these).
+default_window_width: 1280
+default_window_height: 800

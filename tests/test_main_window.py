@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPointF, QTimer, Qt
+from PySide6.QtCore import QByteArray, QEvent, QPointF, QSize, QTimer, Qt
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import QApplication
 
 from conftest import pump
+from video_previewer import config
 from video_previewer.models.video_item import VideoItem
 from video_previewer.ui.main_window import MainWindow
 
@@ -180,5 +181,53 @@ def test_scan_cancellation_hook_covers_close(qapp, cache_dir, tmp_path):
         assert hook() is False  # current generation, window alive
         win._closing = True
         assert hook() is True  # closing supersedes even the current scan
+    finally:
+        win.close()
+
+
+def test_window_geometry_restored_across_instances(qapp, cache_dir, file_settings):
+    # The window remembers its geometry across runs: closing persists it, and
+    # a fresh MainWindow picks it up — even though the exit decision (discard,
+    # via the conftest stub) forgets the folder itself.
+    win = MainWindow()
+    # 700x500 fits inside the offscreen platform's 800x800 virtual screen;
+    # restoreGeometry clamps sizes larger than the screen, so anything
+    # bigger would not round-trip exactly.
+    win.resize(700, 500)
+    win.close()
+    win.deleteLater()
+
+    win2 = MainWindow()
+    try:
+        assert win2.size() == QSize(700, 500)
+    finally:
+        win2.close()
+
+
+def test_window_default_size_without_saved_geometry(qapp, cache_dir, file_settings):
+    # First run: nothing remembered yet, so the configured default applies.
+    win = MainWindow()
+    try:
+        assert win.size() == QSize(
+            config.DEFAULT_WINDOW_WIDTH, config.DEFAULT_WINDOW_HEIGHT
+        )
+    finally:
+        win.close()
+
+
+def test_window_corrupt_geometry_falls_back_to_default(qapp, cache_dir, file_settings):
+    # Fail soft (rule 8): a corrupt blob must not break startup; the window
+    # simply opens at the default size.
+    from PySide6.QtCore import QSettings
+
+    s = QSettings(str(file_settings), QSettings.Format.IniFormat)
+    s.setValue(config.SETTING_WINDOW_GEOMETRY, QByteArray(b"not a geometry blob"))
+    s.sync()
+
+    win = MainWindow()
+    try:
+        assert win.size() == QSize(
+            config.DEFAULT_WINDOW_WIDTH, config.DEFAULT_WINDOW_HEIGHT
+        )
     finally:
         win.close()

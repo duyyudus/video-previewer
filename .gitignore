@@ -219,3 +219,5 @@ __marimo__/
 
 # Generated artifacts (render_check.py)
 scripts/screenshot-offscreen.png
+
+.zcode/*

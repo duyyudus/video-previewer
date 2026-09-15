@@ -43,7 +43,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(config.APP_NAME)
-        self.resize(1280, 800)
+        self.resize(config.DEFAULT_WINDOW_WIDTH, config.DEFAULT_WINDOW_HEIGHT)
 
         # --- persistence + cache -------------------------------------------------
         self._settings = QSettings()
@@ -113,6 +113,12 @@ class MainWindow(QMainWindow):
             self._status_label.setText(
                 "; ".join(unavailable) + " \u2014 thumbnails unavailable"
             )
+
+        # Restore the remembered window geometry (size, position, maximized
+        # state). A missing or invalid blob leaves the default size above.
+        geometry = self._settings.value(config.SETTING_WINDOW_GEOMETRY)
+        if geometry:
+            self.restoreGeometry(geometry)
 
         # Restore the last opened folder (if it still exists).
         last = self._settings.value(config.SETTING_LAST_FOLDER)
@@ -247,6 +253,10 @@ class MainWindow(QMainWindow):
         # updates, and every pointer gesture in the grid) is a no-op. Nothing
         # can start new workers or change the model mid-close.
         self._closing = True
+        # Remember the window geometry no matter what the exit dialog decides
+        # below; sync now so it is on disk even if teardown hits a snag.
+        self._settings.setValue(config.SETTING_WINDOW_GEOMETRY, self.saveGeometry())
+        self._settings.sync()
         folder = self._current_folder
         # Ask before draining so the user is not kept waiting for workers.
         keep = folder is None or exit_dialog.ask_keep_on_exit(
