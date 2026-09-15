@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, QModelIndex
+from PySide6.QtCore import QSettings, QModelIndex, QDir
 
 from conftest import pump
 from video_previewer import config
@@ -42,6 +42,34 @@ def test_sidebar_lists_directories_only(qapp, tmp_path):
             model.index(row, 0, model.index(str(root))).data() for row in range(2)
         )
         assert names == ["alpha", "beta"]  # note.txt is not a folder
+    finally:
+        sidebar.deleteLater()
+        qapp.processEvents()
+
+
+def test_drive_roots_list_their_folders(qapp):
+    # Qt's QFileSystemModel leaves drive roots empty unless each root is
+    # force-loaded once; the sidebar primes them at construction, so every
+    # drive must end up showing what a plain QDir listing sees.
+    sidebar = FolderSidebar()
+    model = sidebar._fs_model
+    expected = {
+        d.absolutePath(): len(QDir(d.absolutePath()).entryList(model.filter()))
+        for d in QDir.drives()
+    }
+    try:
+        assert pump(
+            qapp,
+            lambda: all(
+                model.rowCount(model.index(path)) == count
+                for path, count in expected.items()
+            ),
+            timeout=30,
+        )
+        top_paths = {
+            model.filePath(model.index(row, 0)) for row in range(model.rowCount())
+        }
+        assert set(expected) <= top_paths  # every drive is reachable
     finally:
         sidebar.deleteLater()
         qapp.processEvents()

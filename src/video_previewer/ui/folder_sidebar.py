@@ -38,6 +38,8 @@ class FolderSidebar(QTreeView):
         self._fs_model.setFilter(
             QDir.Filter.Dirs | QDir.Filter.Drives | QDir.Filter.NoDotAndDotDot
         )
+        # Drive roots never populate on their own (see _prime_drive_roots).
+        self._prime_drive_roots()
         self.setModel(self._fs_model)
         # Only the name column is meaningful for a folder tree.
         for column in range(1, self._fs_model.columnCount()):
@@ -57,6 +59,21 @@ class FolderSidebar(QTreeView):
         self.doubleClicked.connect(self._on_double_clicked)
 
     # -- root + selection ---------------------------------------------------------
+
+    def _prime_drive_roots(self) -> None:
+        """Force-list every drive root once at construction.
+
+        QFileSystemModel on Windows leaves drive roots permanently empty:
+        their background listing never produces rows (observed on Qt 6.11 —
+        expanding a drive showed no folders at all, and some drives did not
+        even appear at the top level, while a plain QDir listing worked).
+        Pointing rootPath at each drive in turn forces that listing; the
+        trailing setRootPath("") restores the whole-disk root the tree is
+        meant to show.
+        """
+        for drive in QDir.drives():
+            self._fs_model.setRootPath(drive.absolutePath())
+        self._fs_model.setRootPath("")
 
     def set_root(self, path: Path) -> None:
         """Restrict the tree to *path* (tests isolate the tree to tmp dirs)."""
