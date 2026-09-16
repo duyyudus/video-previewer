@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, QModelIndex, QDir
+from PySide6.QtCore import QModelIndex, QDir
 
 from conftest import pump
 from video_previewer import config

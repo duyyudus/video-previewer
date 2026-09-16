@@ -12,6 +12,9 @@ low on resources.
 * **Grid** — `QListView` + custom `QAbstractListModel` + custom delegate
   (model/view virtualization; only visible tiles are painted, so folders with
   thousands of videos stay responsive).
+* **Folder navigation** — a toggleable sidebar (`QTreeView` over a
+  directories-only `QFileSystemModel`) browses the filesystem; a single click
+  only expands a folder, a **double-click** loads it into the grid.
 * **Scanning** — folder walk runs on a worker thread and emits results in
   batches, so the grid populates incrementally while scanning continues.
   A persistent scan cache makes re-opening a folder instant.
@@ -54,7 +57,12 @@ Then click **Open Folder…** and pick a folder with videos.
 * The **Subfolders** checkbox toggles recursive scanning (remembered).
 * Double-click a tile to open that video with your default player;
   double-clicking empty grid space opens the folder picker instead.
-* The last opened folder is restored on next launch.
+* The **Sidebar** button shows or hides the folder tree; dragging the divider
+  resizes it (both are remembered).
+* The last opened folder and the window size/position are restored on next
+  launch.
+* Closing the window asks whether to **keep** the folder for next launch or
+  **discard** it, which also drops its cached thumbnails and metadata.
 * Tunables (thumbnail size, grid metrics, timeouts, concurrency, autoplay
   delay, seek throttle, supported extensions) live in `settings.yml` in the
   project root; restart the app after editing. Point
@@ -84,9 +92,12 @@ src/video_previewer/
 ├── main.py            # entry point
 ├── app.py             # QApplication setup, dark palette
 ├── config.py          # settings.yml loader + defaults + paths
-├── ui/                # main window, grid view, item delegate
+├── open_external.py   # open a video in the OS-default player
+├── ui/                # main window, grid view, item delegate,
+│                      #   folder sidebar, exit prompt
 ├── models/            # VideoItem, QAbstractListModel
-├── media/             # ffprobe metadata, ffmpeg thumbnailer, shared player
+├── media/             # ffprobe metadata, ffmpeg thumbnailer, shared
+│                      #   player + timeline scrub bar overlay
 ├── cache/             # SQLite metadata DB + thumbnail cache policy
 └── workers/           # scanner + bounded thumbnail queue (QThreadPool)
 ```

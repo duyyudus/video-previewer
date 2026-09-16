@@ -18,6 +18,7 @@ Python 3.12+, PySide6 (Qt 6), `ffmpeg`/`ffprobe` on `PATH`.
 uv sync                 # create .venv and install deps (incl. dev group)
 uv run video-preview    # run the app (or double-click run.bat on Windows)
 uv run pytest           # run the test suite (headless)
+uv run ruff check       # lint (rule set deliberately minimal, see pyproject.toml)
 uv run python scripts/render_check.py   # offscreen smoke check; writes
                                         # scripts/screenshot-offscreen.png
 ```
@@ -45,6 +46,7 @@ src/video_previewer/
 ├── app.py             # QApplication bootstrap, dark palette, run()
 ├── config.py          # settings.yml loader + built-in defaults +
 │                      #   path/env helpers
+├── open_external.py   # open a video with the OS-default player (fail soft)
 ├── ui/
 │   ├── main_window.py # MainWindow: folder selection, state, exit dialog
 │   ├── video_grid.py  # VideoGrid (QListView) + responsive column layout
@@ -86,7 +88,8 @@ scripts/render_check.py
 4. **Cache expensive work.** Thumbnails (JPEG) + metadata (SQLite) persist per
    user; a file is re-processed only when its size or mtime changes
    (`VideoItem.vid` identity). Scan results are cached per (folder,
-   recursive) key.
+   recursive) key. Files that ffmpeg refuses are negatively cached so a broken
+   file is not re-probed on every scan.
 5. **Throttle scrubbing.** `setPosition` at most ~30/s (`SEEK_THROTTLE_MS`),
    one pending seek flushed by a single-shot `QTimer`.
 6. **Isolate the playback backend.** All Qt Multimedia coupling lives in
@@ -105,10 +108,11 @@ scripts/render_check.py
   `@dataclass(slots=True)` for data types.
 - **Tunables live in `settings.yml`** (project root) — thumbnail
   geometry/timeout/concurrency, scan batch size, grid metrics, autoplay
-  delay, seek throttle, supported extensions. `config.py` loads them with
-  built-in defaults (fail soft) and re-exports them as module constants;
-  feature code keeps reading `config.X`. Do not scatter magic numbers into
-  feature code.
+  delay, seek throttle, double-click drift limit, default window size, sidebar
+  width, supported extensions. `config.py` loads them with built-in defaults
+  (fail soft; out-of-range numbers are clamped) and re-exports them as module
+  constants; feature code keeps reading `config.X`. Do not scatter magic
+  numbers into feature code.
 - Concurrency: Qt-native only (`QThreadPool`, `QRunnable`, signals/slots).
   Do **not** introduce asyncio.
 - The shared SQLite connection is created with `check_same_thread=False` and
@@ -122,7 +126,7 @@ scripts/render_check.py
   must stay stable or the cache silently invalidates.
 - Platform notes: the exit prompt (`exit_dialog.ask_keep_on_exit`) guards
   `closeEvent`; the last folder + recursive toggle persist via `QSettings`,
-  as do the sidebar toggle and its split width.
+  as do the window geometry, the sidebar toggle, and its split width.
 
 ## Commit messages
 
@@ -152,8 +156,9 @@ visible in the window, even if it also touches logic.
   pipeline tests skip themselves when ffmpeg is unavailable.
 - `pump(app, condition)` spins the event loop until a condition holds — use it
   to wait for async signals in tests instead of sleeping.
-- Autouse fixtures: `_clean_settings` clears `last_folder`/`recursive` between
-  tests, and `_no_exit_prompt` stubs `exit_dialog.ask_keep_on_exit` to
+- Autouse fixtures: `_clean_settings` clears every persisted `QSettings` key
+  (last folder, recursive, window geometry, sidebar visibility and split)
+  between tests, and `_no_exit_prompt` stubs `exit_dialog.ask_keep_on_exit` to
   `False` so `closeEvent` never blocks. Tests that exercise the "keep"
   outcome must re-stub `ask_keep_on_exit` themselves.
 - Windows/DSH quirk (keep if editing conftest): when tests run inside a DSH

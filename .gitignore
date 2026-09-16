@@ -220,4 +220,7 @@ __marimo__/
 # Generated artifacts (render_check.py)
 scripts/screenshot-offscreen.png
 
+# Scratch dirs from ad-hoc render/smoke runs
+.tmp-*/
+
 .zcode/*
