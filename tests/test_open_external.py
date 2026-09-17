@@ -6,8 +6,9 @@ import time
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QEvent, QPointF, Qt
-from PySide6.QtGui import QMouseEvent
+from PySide6.QtCore import QEvent, QItemSelectionModel, QPointF, Qt
+from PySide6.QtGui import QKeyEvent, QMouseEvent
+from PySide6.QtWidgets import QApplication
 
 from video_previewer.models.video_item import VideoItem
 from video_previewer.models.video_model import VideoModel
@@ -328,4 +329,52 @@ def test_quick_presses_on_different_tiles_do_not_open(monkeypatch, qapp, tmp_pat
     assert rect_b.isValid() and not rect_b.intersects(rect_a)
     _press(grid, QPointF(rect_a.center()))
     _press(grid, QPointF(rect_b.center()))
+    assert opened == []
+# -- Enter key opens the current tile -------------------------------------------------
+
+
+def _key(grid: VideoGrid, key: Qt.Key) -> None:
+    QApplication.sendEvent(
+        grid, QKeyEvent(QEvent.Type.KeyPress, key, Qt.KeyboardModifier.NoModifier)
+    )
+
+
+@pytest.mark.parametrize("key", [Qt.Key.Key_Return, Qt.Key.Key_Enter])
+def test_enter_opens_current_tile(monkeypatch, qapp, tmp_path, key):
+    model = VideoModel()
+    item = _make_item(tmp_path)
+    model.add_items([item])
+    grid = VideoGrid(model)
+    grid.resize(800, 600)
+    grid.show()
+    qapp.processEvents()
+
+    opened = []
+    monkeypatch.setattr(
+        "video_previewer.ui.video_grid.open_externally",
+        lambda path: opened.append(path) or True,
+    )
+    grid.selectionModel().select(
+        model.index(0),
+        QItemSelectionModel.SelectionFlag.Select
+        | QItemSelectionModel.SelectionFlag.Rows,
+    )
+    _key(grid, key)
+    assert opened == [item.path]
+
+
+def test_enter_without_selection_opens_nothing(monkeypatch, qapp, tmp_path):
+    model = VideoModel()
+    model.add_items([_make_item(tmp_path)])
+    grid = VideoGrid(model)
+    grid.resize(800, 600)
+    grid.show()
+    qapp.processEvents()
+
+    opened = []
+    monkeypatch.setattr(
+        "video_previewer.ui.video_grid.open_externally",
+        lambda path: opened.append(path) or True,
+    )
+    _key(grid, Qt.Key.Key_Return)
     assert opened == []

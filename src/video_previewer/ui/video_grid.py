@@ -7,7 +7,8 @@ Pointer handling (via an event filter on the viewport) maps each tile to:
 
 A double-click opens the tile's video with the OS-default player; on empty
 grid space (no video under the pointer) it emits ``open_folder_requested``
-so the window can offer its folder picker.
+so the window can offer its folder picker. Enter opens the current (selected)
+tile the same way.
 """
 
 from __future__ import annotations
@@ -159,6 +160,16 @@ class VideoGrid(QListView):
             # Escape clears the selection (Explorer-like); never steal it
             # from an open dialog — a modal dialog takes keys first.
             self.clearSelection()
+            return
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            # Enter opens the selected tile with the OS player (Explorer-
+            # like). The view auto-sets a current index without a real
+            # selection, so require hasSelection(); reuse the double-click
+            # dedupe so one gesture never opens twice.
+            sel = self.selectionModel()
+            current = sel.currentIndex()
+            if sel.hasSelection() and current.isValid():
+                self._open_item(current.row())
             return
         super().keyPressEvent(event)
 
