@@ -49,8 +49,10 @@ src/video_previewer/
 ├── open_external.py   # open a video with the OS-default player (fail soft)
 ├── ui/
 │   ├── main_window.py # MainWindow: folder selection, state, exit dialog
-│   ├── video_grid.py  # VideoGrid (QListView) + responsive column layout
+│   ├── video_grid.py  # VideoGrid (QListView) + responsive column layout;
+│   │                  #   click/Ctrl/Shift/rubber-band selection, F2 rename
 │   ├── video_delegate.py  # tile painting (thumbnail + filename), hover/scrub
+│   ├── rename_dialog.py   # F2 rename: edit the stem, extension fixed
 │   ├── folder_sidebar.py  # folder tree sidebar (QTreeView + QFileSystemModel);
 │   │                  #   double-click loads a folder, single click never does
 │   └── exit_dialog.py # keep/discard prompt on close

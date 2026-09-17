@@ -56,8 +56,9 @@ def test_roles(model):
     assert model.data(idx, VideoModel.ThumbReadyRole) is True
     assert model.data(idx, VideoModel.ThumbnailPathRole) == Path("/t.jpg")
     assert isinstance(model.data(idx, VideoModel.VidRole), str)
-    # not selectable
-    assert bool(model.flags(idx) & Qt.ItemFlag.ItemIsSelectable) is False
+    # selectable (grid actions run off the selection) but not editable
+    assert bool(model.flags(idx) & Qt.ItemFlag.ItemIsSelectable) is True
+    assert bool(model.flags(idx) & Qt.ItemFlag.ItemIsEditable) is False
     assert bool(model.flags(idx) & Qt.ItemFlag.ItemIsEnabled) is True
 
 

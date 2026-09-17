@@ -270,6 +270,46 @@ class Database:
             self._conn.commit()
         return cur.rowcount
 
+    def rename_scan_entry(self, old_path: str, new_path: str) -> int:
+        """Rewrite cached scan entries pointing at *old_path* to *new_path*.
+
+        The scans table holds one small row per (folder, recursive) key, so
+        a full pass is cheaper than deriving which hashed key a renamed file
+        belongs to (it may sit in any subfolder of any cached scan). Without
+        this, reopening the folder replays the dead path from the scan cache
+        and the grid grows a phantom tile next to the renamed one.
+
+        Entries store the walker's original path casing, while callers may
+        hold a ``normalize_path`` form (lowercased on Windows), so the
+        comparison normalizes both sides — matching the case rules the rest
+        of the cache uses.
+        """
+        self._guard()
+        old_key = normalize_path(Path(old_path))
+        updated = 0
+        with self._lock:
+            rows = self._conn.execute("SELECT key, entries FROM scans").fetchall()
+            for r in rows:
+                try:
+                    entries = json.loads(r["entries"])
+                except ValueError:
+                    continue
+                changed = False
+                for e in entries:
+                    if e.get("path") == new_path:
+                        continue  # already current (patched before save)
+                    if normalize_path(Path(e.get("path", ""))) == old_key:
+                        e["path"] = new_path
+                        changed = True
+                if changed:
+                    self._conn.execute(
+                        "UPDATE scans SET entries = ? WHERE key = ?",
+                        (json.dumps(entries), r["key"]),
+                    )
+                    updated += 1
+            self._conn.commit()
+        return updated
+
     def save_scan(self, key: str, entries: list[dict[str, Any]]) -> None:
         self._guard()
         with self._lock:

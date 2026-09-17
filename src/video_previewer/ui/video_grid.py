@@ -29,6 +29,9 @@ class VideoGrid(QListView):
     #: Emitted when the user double-clicks empty grid space (no video tile
     #: under the pointer); the window opens its folder picker in response.
     open_folder_requested = Signal()
+    #: Emitted on F2 while one or more tiles are selected; the window runs
+    #: the rename action on the current selection.
+    rename_requested = Signal()
 
     def __init__(self, model: VideoModel, parent=None) -> None:
         super().__init__(parent)
@@ -60,8 +63,11 @@ class VideoGrid(QListView):
         self.setWrapping(True)
         self.setUniformItemSizes(True)
         self.setMovement(QListView.Movement.Static)
-        self.setSelectionMode(QListView.SelectionMode.NoSelection)
-        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        # Click / Ctrl+click / Shift+click / rubber band select tiles; the
+        # window runs actions (F2 rename) off this selection. Focus lets the
+        # grid receive the key presses those actions use.
+        self.setSelectionMode(QListView.SelectionMode.ExtendedSelection)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setMouseTracking(True)
         self.setSpacing(config.GRID_SPACING)
@@ -140,6 +146,21 @@ class VideoGrid(QListView):
             elif etype == QEvent.Type.MouseButtonPress:
                 self._on_press(event.position().toPoint())
         return super().eventFilter(obj, event)
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if self._closing:
+            event.ignore()
+            return
+        if event.key() == Qt.Key.Key_F2:
+            if self.selectionModel().hasSelection():
+                self.rename_requested.emit()
+            return
+        if event.key() == Qt.Key.Key_Escape:
+            # Escape clears the selection (Explorer-like); never steal it
+            # from an open dialog — a modal dialog takes keys first.
+            self.clearSelection()
+            return
+        super().keyPressEvent(event)
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
         # Qt's own double-click delivery (kept for the cases where it works).

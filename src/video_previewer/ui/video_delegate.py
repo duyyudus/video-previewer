@@ -19,7 +19,7 @@ from PySide6.QtGui import (
     QPolygon,
     QPixmap,
 )
-from PySide6.QtWidgets import QStyledItemDelegate
+from PySide6.QtWidgets import QStyle, QStyledItemDelegate
 
 from .. import config
 from ..models.video_model import VideoModel
@@ -30,6 +30,8 @@ _PLACEHOLDER_BG = QColor(38, 38, 46)
 _PLACEHOLDER_GLYPH = QColor(110, 110, 125)
 _NAME_COLOR = QColor(225, 225, 232)
 _NAME_COLOR_DIM = QColor(150, 150, 160)
+_SELECTION_RING = QColor(70, 140, 230)
+_SELECTION_FILL = QColor(70, 140, 230, 36)
 
 _PIXMAP_CACHE_LIMIT = 256
 # Decoded pixmaps are cached per *quantized* tile width so a window resize
@@ -81,6 +83,18 @@ class VideoDelegate(QStyledItemDelegate):
                 painter.setClipping(False)
         else:
             self._paint_placeholder(painter, img_rect)
+
+        # Selection ring: the grid is the only place a tile can be
+        # selected, so a clear accent border + tint marks the action target.
+        if option.state & QStyle.StateFlag.State_Selected:
+            # drawRoundedRect() strokes AND fills with the current brush —
+            # without NoBrush the leftover tile-background fill would paint
+            # an opaque card over the thumbnail we just drew.
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(_SELECTION_FILL, 6))
+            painter.drawRoundedRect(item_rect.adjusted(3, 3, -3, -3), 6, 6)
+            painter.setPen(QPen(_SELECTION_RING, 2))
+            painter.drawRoundedRect(item_rect.adjusted(1, 1, -1, -1), 7, 7)
 
         # Filename
         filename = str(index.data(VideoModel.FilenameRole) or "")

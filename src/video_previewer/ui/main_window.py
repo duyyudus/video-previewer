@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMenu,
+    QMessageBox,
     QPushButton,
     QSplitter,
     QVBoxLayout,
@@ -34,9 +35,9 @@ from ..cache.cache import ThumbnailCache
 from ..cache.database import open_database
 from ..media.player import PreviewPlayer
 from ..models.sorting import SortKey, SortOrder
-from ..models.video_item import VideoItem
+from ..models.video_item import VideoItem, normalize_path
 from ..models.video_model import VideoModel
-from ..ui import exit_dialog
+from ..ui import exit_dialog, rename_dialog
 from ..ui.folder_sidebar import FolderSidebar
 from ..ui.video_grid import VideoGrid
 from ..workers.scanner import ScanResult, ScanSignals, Scanner
@@ -78,6 +79,8 @@ class MainWindow(QMainWindow):
         # Double-clicking empty grid space (no video under the pointer) is a
         # shortcut for the "Open Folder…" picker.
         self._grid.open_folder_requested.connect(self._browse)
+        # F2 on a selected tile renames the video file in place.
+        self._grid.rename_requested.connect(self._rename_selected)
         # The sidebar tree is created here too: its double-click loads a
         # folder into the grid through the same funnel as the picker.
         self._sidebar = FolderSidebar(self)
@@ -86,6 +89,14 @@ class MainWindow(QMainWindow):
         self._thumbs = ThumbnailQueue(self._db, self._cache, self)
         self._scan_signals = ScanSignals(self)
         self._scan_gen = 0
+        # Renames done since the current folder was opened:
+        # normalized old path -> new path. A scan's fresh-file list is
+        # captured while walking, but its purge runs when it finishes, so a
+        # rename landing in between would otherwise make the purge treat the
+        # renamed file as deleted (dropping the migrated row + JPEG) and a
+        # late batch would re-add the dead old path as a ghost tile. Scan
+        # results are therefore remapped through this map.
+        self._renamed: dict[str, str] = {}
         # Set at the start of closeEvent: while the window is closing, the
         # drain loop still runs the event queue, and mutations coming in
         # through queued events (clicks, late scan results) must be no-ops.
@@ -216,6 +227,7 @@ class MainWindow(QMainWindow):
             return
         self._scan_gen += 1  # invalidate any in-flight scan of another folder
         gen = self._scan_gen
+        self._renamed.clear()  # renames belong to the folder session
         self._current_folder = folder
         self._folder_label.setText(str(folder))
         self._folder_label.setToolTip(str(folder))
@@ -315,6 +327,8 @@ class MainWindow(QMainWindow):
         to_add: list[VideoItem] = []
         to_update: list[VideoItem] = []
         for item in items:
+            if normalize_path(item.path) in self._renamed:
+                continue  # walked before a rename; the old path is dead
             row = self._model.row_for(item.path)
             if row is None:
                 to_add.append(item)
@@ -340,7 +354,31 @@ class MainWindow(QMainWindow):
     def _on_scan_finished(self, result: ScanResult, gen: int) -> None:
         if gen != self._scan_gen or self._closing:
             return
-        removed = self._cache.purge_folder(result.folder, result.fresh)
+        for old_key, new_p in self._renamed.items():
+            # A scan that walked before the rename writes its scan row when
+            # it *finishes* — possibly after the rename-time patch in
+            # _rename_selected. Repair it now so the next launch does not
+            # replay the dead path from the scan cache.
+            self._db.rename_scan_entry(Path(old_key).as_posix(), new_p)
+        fresh = result.fresh
+        if self._renamed:
+            # The walk predated the rename(s): swap the old paths for the
+            # current files, re-stat'd now so the vid the purge compares
+            # matches what cache.rename stored. A file that vanished after
+            # the rename simply drops out of the list — purging it is right.
+            fixed: dict[str, tuple[int, float]] = {}
+            for p, sm in fresh.items():
+                new_p = self._renamed.get(normalize_path(Path(p)))
+                if new_p is None:
+                    fixed[p] = sm
+                    continue
+                try:
+                    st = Path(new_p).stat()
+                except OSError:
+                    continue
+                fixed[Path(new_p).as_posix()] = (st.st_size, st.st_mtime)
+            fresh = fixed
+        removed = self._cache.purge_folder(result.folder, fresh)
         if removed:
             log.info("purged %d stale cache entries", removed)
         self._model.set_layout_deferred(False)  # settle into the sort order
@@ -371,6 +409,88 @@ class MainWindow(QMainWindow):
 
     def _on_thumb_failed(self, path: str) -> None:
         log.warning("thumbnail failed for %s", path)
+
+    # -- tile actions (selection-driven) --------------------------------------------------
+
+    def _rename_selected(self) -> None:
+        """F2: rename the one selected video file (stem only, ext fixed).
+
+        Renaming changes the file's cache identity (``vid`` hashes the
+        path), so the cached row + JPEG are migrated to the new identity
+        (rule 4: no re-extraction), the scan cache is patched (a reopening
+        must not replay the dead path), and the model row is replaced —
+        its resort moves the tile into the new sort position and the
+        persistent-index remap carries the selection along.
+        """
+        if self._closing:
+            return
+        rows = sorted(
+            i.row() for i in self._grid.selectionModel().selectedRows()
+        )
+        if len(rows) != 1:
+            return  # rename is a single-file action (v1)
+        row = rows[0]
+        item = self._model.item_at(row)
+        if item is None:
+            return
+        stem = rename_dialog.ask_new_stem(self, item.filename)
+        if stem is None:
+            return
+        _, ext = rename_dialog.split_stem(item.filename)
+        new_path = item.path.with_name(stem + ext)
+        # Exact string compare: Path equality is case-insensitive on
+        # Windows, where a case-only rename IS a real change.
+        if new_path.name == item.path.name:
+            return
+        self._player.leave()
+        self._grid.clear_hover()
+        try:
+            item.path.rename(new_path)
+        except FileExistsError:
+            # A different file already owns the name. exists() cannot make
+            # this call before the rename: on a case-insensitive filesystem
+            # it also answers True for a case-only rename of this very file
+            # (a.mp4 -> A.mp4), which is legal. The rename itself is the
+            # race-free check.
+            QMessageBox.warning(
+                self,
+                config.APP_NAME,
+                f"A file named {new_path.name} already exists.",
+            )
+            return
+        except OSError as exc:
+            QMessageBox.warning(
+                self, config.APP_NAME, f"Rename failed: {exc}"
+            )
+            return
+
+        st = new_path.stat()
+        new_item = VideoItem(new_path, st.st_size, st.st_mtime)
+        thumb = self._cache.rename(item, new_item)
+        if thumb is not None:
+            new_item = new_item.with_thumbnail(thumb)
+        self._db.rename_scan_entry(
+            item.path.as_posix(), new_path.as_posix()
+        )
+        # Re-resolve: nothing between ask_new_stem and here should have
+        # moved rows, but the model's contract says a row is only valid
+        # immediately after row_for().
+        row = self._model.row_for(item.path)
+        if row is None:
+            return  # the folder switched under the dialog; file is renamed
+        # Record only after the bail-out: _open_folder cleared the map for
+        # the new folder, and an entry for the OLD folder must not leak into
+        # the new session's scan remapping. Chain a->b then b->c: rewrite
+        # any earlier hop that ended at this file's old path.
+        self._renamed = {
+            k: (new_path.as_posix() if v == item.path.as_posix() else v)
+            for k, v in self._renamed.items()
+        }
+        self._renamed[normalize_path(item.path)] = new_path.as_posix()
+        self._model.rename_item(row, new_item)
+        if not new_item.thumb_ready:
+            self._thumbs.request(new_item)
+        self._update_status()
 
     # -- shutdown ------------------------------------------------------------------------
 

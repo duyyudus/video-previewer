@@ -126,6 +126,48 @@ class ThumbnailCache:
             failed=False,  # a success always clears an earlier failure
         )
 
+    def rename(self, old: VideoItem, new: VideoItem) -> Path | None:
+        """Move a renamed file's cached row + JPEG to its new identity.
+
+        The file itself has already been renamed by the caller; ``vid``
+        includes the path, so the old row/thumbnail would otherwise be
+        stranded and the renamed file re-probed and re-extracted on the
+        next scan (rule 4). Returns the relocated thumbnail path, or None
+        when nothing usable was cached.
+        """
+        row = self._db.get_video(old.vid)
+        if row is None:
+            return None
+        new_thumb: Path | None = None
+        if row.thumbnail and not row.failed:
+            src_p = Path(row.thumbnail)
+            dst_p = self.thumbnail_path_for(new.vid)
+            try:
+                if src_p.exists():
+                    if src_p != dst_p:
+                        src_p.replace(dst_p)
+                    new_thumb = dst_p
+            except OSError:
+                log.warning("could not move thumbnail %s -> %s", src_p, dst_p)
+        self._db.upsert_video(
+            vid=new.vid,
+            path=new.path.as_posix(),
+            size=new.size,
+            mtime=new.modified,
+            thumbnail=str(new_thumb) if new_thumb else "",
+            duration_ms=row.duration_ms,
+            width=row.width,
+            height=row.height,
+            vcodec=row.vcodec,
+            failed=row.failed,
+        )
+        if new.vid != old.vid:
+            # A case-only rename on Windows keeps the vid (paths hash
+            # lowercased): the upsert above already updated the row in
+            # place, and deleting it would drop what we just wrote.
+            self._db.delete_videos([old.vid])
+        return new_thumb
+
     def purge_folder(self, folder: Path, fresh: dict[str, tuple[int, float]]) -> int:
         """Drop cache entries for files that are gone or changed.
 

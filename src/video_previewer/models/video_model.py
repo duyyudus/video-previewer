@@ -86,7 +86,9 @@ class VideoModel(QAbstractListModel):
         return None
 
     def flags(self, index: QModelIndex) -> Qt.ItemFlag:
-        return Qt.ItemIsEnabled  # not selectable: the grid is purely visual
+        # Selectable: the grid drives further actions off the selection
+        # (F2 rename today). Items stay non-editable/non-draggable.
+        return Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
 
     # -- sorting ------------------------------------------------------------
 
@@ -262,6 +264,26 @@ class VideoModel(QAbstractListModel):
             self._defer_layout = outer
             if not outer and self._layout_pending:
                 self._resort(force=True)
+
+    def rename_item(self, row: int, item: VideoItem) -> None:
+        """Replace the item on *row* with one whose *path* changed.
+
+        Used by the rename action: unlike :meth:`update_item` (same path,
+        new metadata) this swaps the identity, so the path -> row map gets
+        the old key dropped and the new one added, and the row is resorted
+        (the name sort usually moves it). The persistent-index remap in
+        ``_resort`` makes the selection follow the renamed tile.
+        """
+        if not 0 <= row < len(self._items):
+            return
+        previous = self._items[row]
+        self._rows.pop(normalize_path(previous.path), None)
+        self._items[row] = item
+        self._rows[normalize_path(item.path)] = row
+        self._keys[row] = self._key_of(item)
+        if not self._resort():
+            idx = self.index(row)
+            self.dataChanged.emit(idx, idx, list(self._ALL_ROLES))
 
     def item_at(self, row: int) -> VideoItem | None:
         if 0 <= row < len(self._items):
