@@ -31,6 +31,8 @@ SETTING_RECURSIVE = "recursive"
 SETTING_WINDOW_GEOMETRY = "window_geometry"
 SETTING_SIDEBAR_VISIBLE = "sidebar_visible"
 SETTING_SIDEBAR_SPLITTER = "sidebar_splitter_state"
+SETTING_SORT_KEY = "sort_key"
+SETTING_SORT_ORDER = "sort_order"
 
 # --- settings.yml -------------------------------------------------------------
 

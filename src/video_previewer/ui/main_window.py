@@ -10,16 +10,19 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
+from enum import StrEnum
 from pathlib import Path
+from typing import TypeVar
 
 from PySide6.QtCore import QCoreApplication, QSettings, QStandardPaths, Qt, QThreadPool
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QAction, QActionGroup, QCloseEvent
 from PySide6.QtWidgets import (
     QCheckBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMenu,
     QPushButton,
     QSplitter,
     QVBoxLayout,
@@ -30,6 +33,7 @@ from .. import config
 from ..cache.cache import ThumbnailCache
 from ..cache.database import open_database
 from ..media.player import PreviewPlayer
+from ..models.sorting import SortKey, SortOrder
 from ..models.video_item import VideoItem
 from ..models.video_model import VideoModel
 from ..ui import exit_dialog
@@ -39,6 +43,16 @@ from ..workers.scanner import ScanResult, ScanSignals, Scanner
 from ..workers.thumbnail_worker import ThumbnailQueue
 
 log = logging.getLogger(__name__)
+
+_E = TypeVar("_E", bound=StrEnum)
+
+
+def _saved_enum(raw: object, enum: type[_E], default: _E) -> _E:
+    """Read a persisted enum setting back (fail soft: junk means *default*)."""
+    try:
+        return enum(str(raw))
+    except ValueError:
+        return default
 
 
 class MainWindow(QMainWindow):
@@ -101,6 +115,11 @@ class MainWindow(QMainWindow):
         self._folder_label.setToolTip("Currently scanned folder")
         self._recursive_chk = QCheckBox("Subfolders", self)
         self._recursive_chk.toggled.connect(self._on_recursive_toggled)
+        self._sort_btn = QPushButton(self)
+        self._sort_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._sort_btn.setToolTip("Sort the thumbnails by name or modification date")
+        self._sort_actions: dict[SortKey | SortOrder, QAction] = {}
+        self._sort_btn.setMenu(self._build_sort_menu())
         self._status_label = QLabel("", self)
         self._status_label.setStyleSheet("color: #9a9aa5;")
         bar.addWidget(self._browse_btn)
@@ -108,6 +127,7 @@ class MainWindow(QMainWindow):
         bar.addWidget(self._folder_label, 0, Qt.AlignmentFlag.AlignVCenter)
         bar.addStretch(1)
         bar.addWidget(self._recursive_chk)
+        bar.addWidget(self._sort_btn)
         bar.addWidget(self._status_label, 0, Qt.AlignmentFlag.AlignVCenter)
 
         vbox.addLayout(bar)
@@ -155,6 +175,19 @@ class MainWindow(QMainWindow):
             # factor soaks up everything else.
             self._splitter.setSizes([config.SIDEBAR_WIDTH, 1])
 
+        # Restore the remembered sort *before* the folder: the first scan
+        # batch should already land in the right order.
+        self._apply_sort(
+            _saved_enum(
+                self._settings.value(config.SETTING_SORT_KEY), SortKey, SortKey.NAME
+            ),
+            _saved_enum(
+                self._settings.value(config.SETTING_SORT_ORDER),
+                SortOrder,
+                SortOrder.ASC,
+            ),
+        )
+
         # Restore the last opened folder (if it still exists).
         last = self._settings.value(config.SETTING_LAST_FOLDER)
         if last:
@@ -193,6 +226,9 @@ class MainWindow(QMainWindow):
         self._player.leave()
         self._grid.clear_hover()  # model resets; cursor tile must not stay "hovered"
         self._model.clear()
+        # The scan arrives in small batches; hold reorders back until it ends
+        # so a big folder costs one relayout instead of one per batch.
+        self._model.set_layout_deferred(True)
         self._thumbs.clear_pending()  # abandoned folder's queued jobs never start
         self._grid.delegate().clear_pixmap_cache()
         self._update_status()
@@ -220,6 +256,47 @@ class MainWindow(QMainWindow):
         if self._current_folder is not None:
             self._open_folder(self._current_folder)
 
+    # -- sorting ---------------------------------------------------------------
+
+    def _build_sort_menu(self) -> QMenu:
+        """Sort-by choices, then direction; one checkable action per option.
+
+        Two exclusive groups (key / order) rather than one entry per
+        key+direction pair: the menu stays two short lists however many
+        options exist, and Qt maintains the checked state for us.
+        """
+        menu = QMenu(self._sort_btn)
+        self._add_sort_options(menu, SortKey)
+        menu.addSeparator()
+        self._add_sort_options(menu, SortOrder)
+        return menu
+
+    def _add_sort_options(self, menu: QMenu, options: type[StrEnum]) -> None:
+        group = QActionGroup(self)
+        group.setExclusive(True)
+        for option in options:
+            action = menu.addAction(option.label)
+            action.setCheckable(True)
+            action.triggered.connect(self._on_sort_selected)
+            group.addAction(action)
+            self._sort_actions[option] = action
+
+    def _on_sort_selected(self) -> None:
+        """A menu entry was clicked: push the (already checked) pair into effect."""
+        self._apply_sort(
+            next(key for key in SortKey if self._sort_actions[key].isChecked()),
+            next(o for o in SortOrder if self._sort_actions[o].isChecked()),
+        )
+
+    def _apply_sort(self, key: SortKey, order: SortOrder) -> None:
+        """Make *key*/*order* the sort: model, menu, button label, settings."""
+        self._sort_actions[key].setChecked(True)
+        self._sort_actions[order].setChecked(True)
+        self._sort_btn.setText(f"Sort: {key.label} {order.arrow}")
+        self._model.set_sort(key, order)
+        self._settings.setValue(config.SETTING_SORT_KEY, str(key))
+        self._settings.setValue(config.SETTING_SORT_ORDER, str(order))
+
     # -- sidebar -----------------------------------------------------------------------
 
     def _on_sidebar_toggled(self, visible: bool) -> None:
@@ -236,7 +313,7 @@ class MainWindow(QMainWindow):
         if gen != self._scan_gen or self._closing:
             return  # stale scan, or the window is draining for close
         to_add: list[VideoItem] = []
-        to_update: list[tuple[int, VideoItem]] = []
+        to_update: list[VideoItem] = []
         for item in items:
             row = self._model.row_for(item.path)
             if row is None:
@@ -245,16 +322,19 @@ class MainWindow(QMainWindow):
                 current = self._model.item_at(row)
                 if current is not None and current.vid != item.vid:
                     # file changed (size/mtime) -> refresh metadata + thumbnail
-                    to_update.append((row, item))
+                    to_update.append(item)
         if to_add:
             # One batched insertion per signal keeps the view cheap even
             # with thousands of items.
             rows = self._model.add_items(to_add)
             for r in rows:
                 self._thumbs.request(self._model.item_at(r))
-        for row, item in to_update:
-            self._model.update_item(row, item)
-            self._thumbs.request(item)
+        if to_update:
+            # By path, never by the rows resolved above: inserting the batch
+            # above may already have moved them.
+            self._model.update_items(to_update)
+            for item in to_update:
+                self._thumbs.request(item)  # a changed file needs a new thumb
         self._update_status()
 
     def _on_scan_finished(self, result: ScanResult, gen: int) -> None:
@@ -263,11 +343,13 @@ class MainWindow(QMainWindow):
         removed = self._cache.purge_folder(result.folder, result.fresh)
         if removed:
             log.info("purged %d stale cache entries", removed)
+        self._model.set_layout_deferred(False)  # settle into the sort order
         self._update_status()
 
     def _on_scan_error(self, message: str) -> None:
         if self._closing:
             return  # a dying scan's error is not something the user can act on
+        self._model.set_layout_deferred(False)  # never leave the order pending
         self._status_label.setText(f"Scan failed: {message}")
 
     def _update_status(self) -> None:

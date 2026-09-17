@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, QEvent, QPointF, QSize, QTimer, Qt
+from PySide6.QtCore import QByteArray, QEvent, QSettings, QPointF, QSize, QTimer, Qt
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import QApplication
 
 from conftest import pump
 from video_previewer import config
+from video_previewer.models.sorting import SortKey, SortOrder
 from video_previewer.models.video_item import VideoItem
 from video_previewer.ui.main_window import MainWindow
 
@@ -20,6 +22,10 @@ def _dummy_folder(tmp_path, name: str = "vids") -> Path:
     (folder / "a.mp4").write_bytes(b"x" * 64)
     (folder / "b.mp4").write_bytes(b"y" * 64)
     return folder
+
+
+def _names(win: MainWindow) -> list[str]:
+    return [win.model.item_at(row).filename for row in range(win.model.count())]
 
 
 def test_open_folder_resets_stale_hover_state(qapp, cache_dir, tmp_path):
@@ -78,6 +84,153 @@ def test_empty_space_double_click_opens_folder_picker(qapp, cache_dir, tmp_path,
         win.grid.mouseDoubleClickEvent(event)  # empty model: every spot is empty
         assert pump(qapp, lambda: win.model.count() == 2, timeout=30)
         assert win._folder_label.text() == str(folder)
+    finally:
+        win.close()
+
+
+def test_sort_menu_orders_the_grid(qapp, cache_dir, tmp_path):
+    # The toolbar Sort menu reorders the existing rows in place: name vs.
+    # date modified, ascending vs. descending, one click each.
+    folder = tmp_path / "vids"
+    folder.mkdir()
+    for name, mtime in (
+        ("b.mp4", 1_600_000_300.0),
+        ("a10.mp4", 1_600_000_100.0),
+        ("a2.mp4", 1_600_000_200.0),
+    ):
+        path = folder / name
+        path.write_bytes(b"x" * 64)
+        os.utime(path, (mtime, mtime))
+
+    win = MainWindow()
+    try:
+        win._open_folder(folder)
+        assert pump(qapp, lambda: win.model.count() == 3, timeout=30)
+
+        def names() -> list[str]:
+            return [win.model.item_at(r).filename for r in range(win.model.count())]
+
+        assert names() == ["a2.mp4", "a10.mp4", "b.mp4"]  # default: name/asc
+        assert win._sort_btn.text() == "Sort: Name \u25b2"
+
+        win._sort_actions[SortOrder.DESC].trigger()
+        assert names() == ["b.mp4", "a10.mp4", "a2.mp4"]
+        assert win._sort_actions[SortOrder.DESC].isChecked()
+        assert not win._sort_actions[SortOrder.ASC].isChecked()
+
+        win._sort_actions[SortKey.MODIFIED].trigger()
+        assert names() == ["b.mp4", "a2.mp4", "a10.mp4"]  # newest first
+        assert win._sort_btn.text() == "Sort: Date modified \u25bc"
+        # the choice is persisted for the next run
+        assert win._settings.value(config.SETTING_SORT_KEY) == "modified"
+        assert win._settings.value(config.SETTING_SORT_ORDER) == "desc"
+    finally:
+        win.close()
+
+
+def test_sort_choice_persists_across_instances(qapp, cache_dir, file_settings):
+    win = MainWindow()
+    win._sort_actions[SortKey.MODIFIED].trigger()
+    win.close()
+    win.deleteLater()
+
+    win2 = MainWindow()
+    try:
+        assert win2.model.sort_key is SortKey.MODIFIED
+        assert win2.model.sort_order is SortOrder.ASC
+        assert win2._sort_actions[SortKey.MODIFIED].isChecked()
+        assert win2._sort_btn.text() == "Sort: Date modified \u25b2"
+    finally:
+        win2.close()
+
+
+def test_corrupt_sort_setting_falls_back_to_default(qapp, cache_dir, file_settings):
+    # Fail soft (rule 8): junk in the settings file must not break startup.
+    s = QSettings(str(file_settings), QSettings.Format.IniFormat)
+    s.setValue(config.SETTING_SORT_KEY, "size")
+    s.setValue(config.SETTING_SORT_ORDER, "sideways")
+    s.sync()
+
+    win = MainWindow()
+    try:
+        assert win.model.sort_key is SortKey.NAME
+        assert win.model.sort_order is SortOrder.ASC
+    finally:
+        win.close()
+
+
+def test_sorting_drops_the_hover_preview(qapp, cache_dir, tmp_path):
+    # Rows move under the cursor when the order changes, so the pinned
+    # preview must not keep playing the old item over a foreign tile.
+    folder = _dummy_folder(tmp_path)
+    win = MainWindow()
+    win.show()
+    try:
+        win._open_folder(folder)
+        assert pump(qapp, lambda: win.model.count() == 2, timeout=30)
+        for _ in range(3):
+            qapp.processEvents()
+        win.grid._on_pointer_move(win.grid._cell_rect(0).center())
+        assert win.grid._hover_row == 0
+        assert win.player.active_path is not None
+
+        win._sort_actions[SortOrder.DESC].trigger()
+        assert win.grid._hover_row == -1
+        assert win.player.active_path is None
+    finally:
+        win.close()
+
+
+def test_scan_batch_that_adds_and_updates_keeps_every_file(qapp, cache_dir, tmp_path):
+    # A reorder moves rows, so a scan batch must not reuse the row numbers it
+    # resolved before inserting: the update used to land on the row the newly
+    # added file had just taken, dropping that file from the grid entirely.
+    folder = tmp_path / "vids"
+    folder.mkdir()
+    for name in ("m.mp4", "z.mp4"):
+        (folder / name).write_bytes(b"x" * 64)
+
+    win = MainWindow()
+    try:
+        win._open_folder(folder)
+        assert pump(qapp, lambda: win.model.count() == 2, timeout=30)
+
+        # one batch: a new file sorting before m.mp4, plus a re-scanned m.mp4
+        win._on_scan_items(
+            [
+                VideoItem(folder / "a.mp4", 100, 1_600_000_000.0),
+                VideoItem(folder / "m.mp4", 100, 1_700_000_000.0),
+            ],
+            win._scan_gen,
+        )
+        assert _names(win) == ["a.mp4", "m.mp4", "z.mp4"]
+        assert win.model.row_for(folder / "a.mp4") is not None
+    finally:
+        win.close()
+
+
+def test_scan_settles_into_the_sort_order_once(qapp, cache_dir, tmp_path):
+    # A scan delivers a folder in small batches; re-permuting the model per
+    # batch is quadratic in the file count, so the grid fills in arrival order
+    # and settles into the sort order once, when the scan ends.
+    folder = tmp_path / "vids"
+    folder.mkdir()
+    for name in ("a.mp4", "b.mp4", "c.mp4"):
+        (folder / name).write_bytes(b"x" * 64)
+
+    win = MainWindow()
+    try:
+        win._apply_sort(SortKey.NAME, SortOrder.DESC)  # fights the scanner's order
+        layouts: list[bool] = []
+        win.model.layoutChanged.connect(lambda: layouts.append(True))
+        done: list[bool] = []
+        win._scan_signals.finished.connect(lambda *_: done.append(True))
+
+        win._open_folder(folder)
+        assert pump(qapp, lambda: bool(done) and win.model.count() == 3, timeout=30)
+
+        assert layouts == [True]  # one relayout for the whole scan
+        assert _names(win) == ["c.mp4", "b.mp4", "a.mp4"]
     finally:
         win.close()
 

@@ -50,6 +50,11 @@ class VideoGrid(QListView):
         self._last_open: tuple[int, float] | None = None  # (row, time)
         self._last_folder_open: float | None = None  # empty-space request
 
+        # A re-sort moves items between rows: without dropping the pointer
+        # state the muted preview would keep playing the previous item's file,
+        # pinned over whatever tile moved under the cursor.
+        model.layoutChanged.connect(self.clear_hover)
+
         self.setViewMode(QListView.ViewMode.IconMode)
         self.setResizeMode(QListView.ResizeMode.Adjust)
         self.setWrapping(True)

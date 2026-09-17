@@ -11,7 +11,9 @@ low on resources.
 
 * **Grid** — `QListView` + custom `QAbstractListModel` + custom delegate
   (model/view virtualization; only visible tiles are painted, so folders with
-  thousands of videos stay responsive).
+  thousands of videos stay responsive). Rows are kept in sort order by the
+  model itself, so every consumer (hover, double-click, thumbnails) sees the
+  same order the user does.
 * **Folder navigation** — a toggleable sidebar (`QTreeView` over a
   directories-only `QFileSystemModel`) browses the filesystem; a single click
   only expands a folder, a **double-click** loads it into the grid.
@@ -55,6 +57,12 @@ Then click **Open Folder…** and pick a folder with videos.
 * Supported formats: `.mp4 .mkv .mov .webm .avi .m4v` (configurable in
   `settings.yml`).
 * The **Subfolders** checkbox toggles recursive scanning (remembered).
+* The **Sort** button orders the grid by **Name** (number-aware, so `ep2`
+  comes before `ep10`) or **Date modified**, **Ascending** or **Descending**.
+  Rows are reordered in place, so the scroll position survives the change and
+  the hover preview simply stops; the choice is remembered. While a folder is
+  still being scanned the grid fills in arrival order and settles into the
+  sort order once the scan ends.
 * Double-click a tile to open that video with your default player;
   double-clicking empty grid space opens the folder picker instead.
 * The **Sidebar** button shows or hides the folder tree; dragging the divider

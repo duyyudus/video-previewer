@@ -56,7 +56,12 @@ src/video_previewer/
 │   └── exit_dialog.py # keep/discard prompt on close
 ├── models/
 │   ├── video_item.py  # VideoItem dataclass; video_id() = sha1(path|size|mtime)
-│   └── video_model.py # QAbstractListModel
+│   ├── sorting.py     # SortKey/SortOrder (name, date modified; asc/desc) +
+│   │                  #   the sort-key derivation shared by model and menu
+│   └── video_model.py # QAbstractListModel (keeps its rows in sort order;
+│                      #   reorders with layoutChanged + remapped persistent
+│                      #   indices so the view keeps its scroll position; a
+│                      #   scan defers the reorder until it finishes)
 ├── media/
 │   ├── metadata.py    # ffprobe probing (duration, size, vcodec)
 │   ├── thumbnailer.py # ffmpeg frame extraction (~15% into the video)
@@ -113,6 +118,13 @@ scripts/render_check.py
   (fail soft; out-of-range numbers are clamped) and re-exports them as module
   constants; feature code keeps reading `config.X`. Do not scatter magic
   numbers into feature code.
+- **Rows may move on any mutation.** The model keeps its rows in sort order,
+  so a row number is only valid until the next mutation: resolve it with
+  `VideoModel.row_for()` immediately before using it, and hand batches of
+  updates to `update_items()` (path-based) instead of looping over
+  `update_item()`. Scan batches run with the reorder deferred
+  (`set_layout_deferred`) and settle once when the scan finishes — resorting
+  per batch is quadratic in the file count.
 - Concurrency: Qt-native only (`QThreadPool`, `QRunnable`, signals/slots).
   Do **not** introduce asyncio.
 - The shared SQLite connection is created with `check_same_thread=False` and
@@ -126,7 +138,8 @@ scripts/render_check.py
   must stay stable or the cache silently invalidates.
 - Platform notes: the exit prompt (`exit_dialog.ask_keep_on_exit`) guards
   `closeEvent`; the last folder + recursive toggle persist via `QSettings`,
-  as do the window geometry, the sidebar toggle, and its split width.
+  as do the window geometry, the sidebar toggle, and its split width, and the
+  grid's sort key + order (`config.SETTING_SORT_KEY` / `SETTING_SORT_ORDER`).
 
 ## Commit messages
 
