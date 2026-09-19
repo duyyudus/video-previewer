@@ -26,6 +26,11 @@ class SeekBarOverlay(QWidget):
     def __init__(self, parent: QWidget) -> None:
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        # The video surface above which this sits starts pointer events at
+        # the topmost widget; without tracking, button-less moves would be
+        # discarded here and never reach the grid viewport (see the
+        # matching call in PreviewPlayer for the full mechanism).
+        self.setMouseTracking(True)
         # Canvas-like widget: no palette background, only the painted bar,
         # so the video frames show through everywhere else.
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)

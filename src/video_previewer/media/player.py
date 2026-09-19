@@ -9,9 +9,10 @@ throttled (a single pending seek flushed at most ~30x/s).
 from __future__ import annotations
 
 import logging
+import os
+from pathlib import Path
 
-from PySide6.QtCore import QObject, QRect, QUrl, QTimer
-from PySide6.QtGui import Qt
+from PySide6.QtCore import QObject, QRect, Qt, QUrl, QTimer
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import QWidget
@@ -21,10 +22,15 @@ from .seek_bar import SeekBarOverlay
 
 log = logging.getLogger(__name__)
 
+#: Mirror of VideoGrid._DEBUG_POINTER (VIDEO_PREVIEWER_DEBUG_POINTER=1).
+_DEBUG_POINTER = bool(os.environ.get("VIDEO_PREVIEWER_DEBUG_POINTER"))
+
 
 def seek_ms(fraction: float, duration_ms: int) -> int:
     """Map a 0..1 horizontal pointer fraction to a seek position in ms."""
     return int(max(0.0, min(1.0, fraction)) * duration_ms)
+
+
 
 
 class PreviewPlayer(QObject):
@@ -44,10 +50,20 @@ class PreviewPlayer(QObject):
             Qt.AspectRatioMode.KeepAspectRatioByExpanding  # fill + center crop
         )
         self._video.setAttribute(Qt.WA_TransparentForMouseEvents)
+        # While the video surface is visible, macOS delivers pointer events
+        # starting AT this widget (transparency notwithstanding). Without
+        # tracking, QApplication::notify discards button-less moves here
+        # ("throw away any mouse-tracking-only mouse events") so the grid
+        # viewport beneath never sees them and hover scrubbing dies; presses
+        # propagate, which is why press-drag scrubbing kept working. With
+        # tracking the move is delivered, ignored, and propagates to the
+        # viewport like presses already do. Same for the seek-bar child.
+        self._video.setMouseTracking(True)
         self._video.hide()
 
         # Timeline overlay pinned to the bottom edge of the video.
         self._seekbar = SeekBarOverlay(self._video)
+        self._seekbar.setMouseTracking(True)  # see _video tracking note
         self._seekbar.hide()
 
         self._player.setAudioOutput(self._audio)
@@ -89,6 +105,9 @@ class PreviewPlayer(QObject):
 
     def enter(self, path: str, rect: QRect) -> None:
         """Pointer entered the tile for *path* at viewport rect *rect*."""
+        if _DEBUG_POINTER:
+            log.info("player enter %s rect=%s cur=%s", Path(path).name, rect,
+                     Path(self._path).name if self._path else None)
         self._autoplay.stop()
         self._pending_seek_ms = None
         self._pending_fraction = None
@@ -107,6 +126,8 @@ class PreviewPlayer(QObject):
 
     def leave(self) -> None:
         """Pointer left the hovered tile (or the grid)."""
+        if _DEBUG_POINTER and self._path is not None:
+            log.info("player leave (was %s)", Path(self._path).name)
         self._autoplay.stop()
         self._pending_seek_ms = None
         self._pending_fraction = None
@@ -128,6 +149,9 @@ class PreviewPlayer(QObject):
         """
         if self._path is None:
             return
+        if _DEBUG_POINTER:
+            log.info("player scrub(%.2f) ready=%s", fraction,
+                     self._source_gen == self._media_gen)
         if self._source_gen != self._media_gen:
             # Autoplay not fired yet (or the source is the previous tile's);
             # the player's duration is stale. Remember the fraction so it is
@@ -153,11 +177,15 @@ class PreviewPlayer(QObject):
     def _start_playback(self) -> None:
         if self._path is None:
             return
+        if _DEBUG_POINTER:
+            log.info("player autoplay fires: %s", Path(self._path).name)
         self._player.setSource(QUrl.fromLocalFile(self._path))
         self._source_gen = self._media_gen  # signals now belong to this media
         self._player.play()
 
     def _stop_playback(self) -> None:
+        if _DEBUG_POINTER and self._video.isVisible():
+            log.info("player hide video widget")
         self._seek.stop()
         self._pending_seek_ms = None
         self._player.stop()
@@ -195,6 +223,8 @@ class PreviewPlayer(QObject):
             QMediaPlayer.MediaStatus.BufferedMedia,
         ):
             if self._path is not None and self._rect is not None and not self._video.isVisible():
+                if _DEBUG_POINTER:
+                    log.info("player show video widget rect=%s", self._rect)
                 self._video.setGeometry(self._rect)
                 self._video.show()
                 self._seekbar.show()
