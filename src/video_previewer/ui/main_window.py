@@ -8,6 +8,7 @@ the shared player; this class only handles UI state.
 from __future__ import annotations
 
 import logging
+import shutil
 import time
 from collections.abc import Callable
 from enum import StrEnum
@@ -85,6 +86,15 @@ class MainWindow(QMainWindow):
         # folder into the grid through the same funnel as the picker.
         self._sidebar = FolderSidebar(self)
         self._sidebar.folder_activated.connect(self._on_sidebar_folder_activated)
+        # Drag-to-move: a drop on a sidebar folder moves the files here
+        # (cache + scan migrate); a drag that ends elsewhere and executes a
+        # Move means a file manager moved the files out on disk, so the grid
+        # must drop those tiles. The ``_drop_handled_internally`` latch tells
+        # the two cases apart (a sidebar drop lands before ``drag_finished``).
+        self._sidebar.files_dropped.connect(self._on_files_dropped)
+        self._grid.drag_started.connect(self._on_drag_started)
+        self._grid.drag_finished.connect(self._on_drag_finished)
+        self._drop_handled_internally = False
 
         self._thumbs = ThumbnailQueue(self._db, self._cache, self)
         self._scan_signals = ScanSignals(self)
@@ -319,6 +329,138 @@ class MainWindow(QMainWindow):
         """Load the double-clicked sidebar folder through the shared funnel."""
         self._open_folder(Path(path))
 
+    # -- drag to move ---------------------------------------------------------------
+
+    def _on_drag_started(self, paths: list) -> None:
+        # New gesture: forget whether the *previous* drag ended internally;
+        # only a sidebar drop during *this* drag counts.
+        self._drop_handled_internally = False
+
+    def _on_files_dropped(self, paths: list, folder: str) -> None:
+        """A sidebar drop: move the dropped files into the target folder."""
+        self._drop_handled_internally = True
+        self._move_videos([Path(p) for p in paths], Path(folder))
+
+    def _on_drag_finished(self, paths: list) -> None:
+        if self._closing or self._drop_handled_internally:
+            return
+        # The drop left the app: a file manager copied or moved the files
+        # itself. The executed action is a poor signal across platforms
+        # (Finder defaults drags to copy, and even a move can land back as
+        # something else), so reconcile against the disk instead: a dragged
+        # file that no longer exists was moved out, and its tile must go
+        # now, not on the next scan. Its scan-cache entry goes too, or the
+        # cache replay would resurrect the tile as a ghost on reopen.
+        gone = [Path(p) for p in paths if not Path(p).exists()]
+        if gone:
+            self._model.remove_items(gone)
+            self._db.remove_scan_entries([p.as_posix() for p in gone])
+            self._grid.clear_hover()
+            self._update_status()
+
+    def _move_videos(self, paths: list[Path], target: Path) -> None:
+        """Move the given files into *target*, migrating caches and rows.
+
+        Mirrors :meth:`_rename_selected` for a batch across folders: every
+        move changes the file's cache identity (``vid`` hashes the path), so
+        the cached row + JPEG are migrated (rule 4), the scan cache is
+        patched, the in-flight-scan remap is recorded, and the model row is
+        replaced in place (its resort moves the tile; the persistent-index
+        remap carries the selection along). ``shutil.move`` rather than
+        ``Path.rename`` because the target may live on another volume.
+        """
+        if self._closing or not target.is_dir():
+            return
+        self._player.leave()
+        self._grid.clear_hover()
+        failed: list[str] = []
+        moved = 0
+        for src in paths:
+            row = self._model.row_for(src)
+            if row is None:
+                continue  # not one of ours (external drag or already moved)
+            item = self._model.item_at(row)
+            if item is None:
+                continue
+            new_path = target / item.filename
+            if normalize_path(new_path) == normalize_path(item.path):
+                continue  # dropped onto its own folder: nothing to do
+            if new_path.exists():
+                failed.append(f"{item.filename} (target already exists)")
+                continue
+            try:
+                shutil.move(str(item.path), str(new_path))
+            except OSError as exc:
+                failed.append(f"{item.filename}: {exc.strerror or exc}")
+                continue
+            moved += 1
+            st = new_path.stat()
+            new_item = VideoItem(new_path, st.st_size, st.st_mtime)
+            thumb = self._cache.rename(item, new_item)
+            if thumb is not None:
+                new_item = new_item.with_thumbnail(thumb)
+            stays = self._stays_in_grid(new_path)
+            if stays:
+                self._db.rename_scan_entry(item.path.as_posix(), new_path.as_posix())
+            else:
+                # Leaving the folder for good: no scan cache may keep
+                # replaying the old path as a ghost tile. (The destination
+                # folder picks the file up on its next real walk.)
+                self._db.remove_scan_entries([item.path.as_posix()])
+            self._note_moved(item.path, new_path)
+            # Re-resolve right before the mutation (the contract: a row is
+            # only valid immediately after ``row_for``).
+            row = self._model.row_for(src)
+            if row is None:
+                continue  # the folder switched under us; file is already moved
+            if stays:
+                self._model.rename_item(row, new_item)
+                if not new_item.thumb_ready:
+                    self._thumbs.request(new_item)
+            else:
+                # The file left the shown folder: the tile goes with it.
+                self._model.remove_items([src])
+                self._grid.clear_hover()
+        if moved:
+            log.info("moved %d video(s) into %s", moved, target)
+        if failed:
+            QMessageBox.warning(
+                self,
+                config.APP_NAME,
+                "Could not move:\n" + "\n".join(failed),
+            )
+        self._update_status()
+
+    def _stays_in_grid(self, new_path: Path) -> bool:
+        """Whether a file at *new_path* still belongs to the folder shown.
+
+        Mirrors the scan's scope: flat scans cover the folder itself,
+        recursive ones its whole subtree. A file moved elsewhere drops its
+        tile instead of lingering as a claim that the folder still holds it.
+        """
+        folder = self._current_folder
+        if folder is None:
+            return False
+        if self._recursive_chk.isChecked():
+            return folder in new_path.parents
+        return new_path.parent == folder
+
+    def _note_moved(self, old_path: Path, new_path: Path) -> None:
+        """Record an old -> new path hop for in-flight scan reconciliation.
+
+        A scan's fresh-file list is captured while walking but its purge runs
+        when it finishes, so a mutation landing in between would otherwise
+        make the purge treat the moved file as deleted (dropping the migrated
+        row + JPEG) and a late batch would re-add the dead old path as a
+        ghost tile. Chain a->b then b->c: rewrite any earlier hop that ended
+        at this file's old path.
+        """
+        self._renamed = {
+            k: (new_path.as_posix() if v == old_path.as_posix() else v)
+            for k, v in self._renamed.items()
+        }
+        self._renamed[normalize_path(old_path)] = new_path.as_posix()
+
     # -- scanner results (main thread, queued from worker) -----------------------------
 
     def _on_scan_items(self, items: list[VideoItem], gen: int) -> None:
@@ -381,6 +523,23 @@ class MainWindow(QMainWindow):
         removed = self._cache.purge_folder(result.folder, fresh)
         if removed:
             log.info("purged %d stale cache entries", removed)
+        # Converge the grid with the disk: rows the walk did not find —
+        # files moved or deleted externally (file-manager drag, another
+        # window, the Trash) — must not linger as ghost tiles. The scan
+        # cache replay re-adds them on every reopen and nothing else ever
+        # removes model rows, so this is the reconciliation point; *fresh*
+        # is the walk's truth (renames already remapped above).
+        present = {normalize_path(Path(p)) for p in fresh}
+        stale = [
+            item.path
+            for r in range(self._model.count())
+            if (item := self._model.item_at(r)) is not None
+            and normalize_path(item.path) not in present
+        ]
+        if stale:
+            log.info("dropping %d vanished tile(s) after scan", len(stale))
+            self._model.remove_items(stale)
+            self._grid.clear_hover()
         self._model.set_layout_deferred(False)  # settle into the sort order
         self._update_status()
 
@@ -480,13 +639,8 @@ class MainWindow(QMainWindow):
             return  # the folder switched under the dialog; file is renamed
         # Record only after the bail-out: _open_folder cleared the map for
         # the new folder, and an entry for the OLD folder must not leak into
-        # the new session's scan remapping. Chain a->b then b->c: rewrite
-        # any earlier hop that ended at this file's old path.
-        self._renamed = {
-            k: (new_path.as_posix() if v == item.path.as_posix() else v)
-            for k, v in self._renamed.items()
-        }
-        self._renamed[normalize_path(item.path)] = new_path.as_posix()
+        # the new session's scan remapping.
+        self._note_moved(item.path, new_path)
         self._model.rename_item(row, new_item)
         if not new_item.thumb_ready:
             self._thumbs.request(new_item)

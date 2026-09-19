@@ -19,8 +19,8 @@ import os
 import time
 
 from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, Signal
-from PySide6.QtGui import QCursor, QGuiApplication
-from PySide6.QtWidgets import QListView
+from PySide6.QtGui import QCursor, QDrag, QGuiApplication
+from PySide6.QtWidgets import QAbstractItemView, QListView
 
 from .. import config
 from ..media.player import PreviewPlayer
@@ -43,6 +43,15 @@ class VideoGrid(QListView):
     #: Emitted on F2 while one or more tiles are selected; the window runs
     #: the rename action on the current selection.
     rename_requested = Signal()
+    #: A tile drag began with these source paths (before the modal drag
+    #: loop runs). The window uses this to reset its "drop handled internally"
+    #: latch so it can tell a sidebar drop from a file-manager drop below.
+    drag_started = Signal(list)
+    #: A tile drag ended without the sidebar handling it: the files were
+    #: dropped on a file manager, which copied/moved them itself. The window
+    #: reconciles the grid against the disk (the executed action is not a
+    #: reliable signal across platforms, so existence is).
+    drag_finished = Signal(list)
 
     def __init__(self, model: VideoModel, parent=None) -> None:
         super().__init__(parent)
@@ -63,6 +72,14 @@ class VideoGrid(QListView):
         self._last_press: tuple[int, QPoint, float] | None = None  # (row, pos, time)
         self._last_open: tuple[int, float] | None = None  # (row, time)
         self._last_folder_open: float | None = None  # empty-space request
+        # Row under the current left-button press (-1: empty space), and whether
+        # that press began on the timeline strip. Both gate ``startDrag``:
+        # a strip press is the *scrub* gesture and must never be
+        # reinterpreted as a drag (Qt's default would start one the moment
+        # the pointer moves past the drag distance), and a press on empty
+        # space belongs to the rubber band, not to a file drag.
+        self._press_row: int = -1
+        self._press_on_strip = False
 
         # A re-sort moves items between rows: without dropping the pointer
         # state the muted preview would keep playing the previous item's file,
@@ -82,6 +99,13 @@ class VideoGrid(QListView):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setMouseTracking(True)
         self.setSpacing(config.GRID_SPACING)
+        # Drag the selected tiles out as file URLs: onto a sidebar folder
+        # (the window moves them) or onto a file-manager window (Explorer /
+        # Finder performs the copy/move itself). Drag-only: the grid never
+        # accepts drops. Rubber-band selection is unaffected.
+        self.setDragEnabled(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DragOnly)
+        self.setDefaultDropAction(Qt.DropAction.MoveAction)
         self._apply_grid_size(self.viewport().width())
 
         self.viewport().installEventFilter(self)
@@ -254,6 +278,13 @@ class VideoGrid(QListView):
         """
         index = self.indexAt(pos)
         row = index.row() if index.isValid() else -1
+        # Remember where this press began so ``canStartDrag`` can refuse to
+        # turn a strip-press (scrub) or an empty-space press (rubber band)
+        # into a file drag.
+        self._press_row = row
+        self._press_on_strip = row >= 0 and self._in_timeline(
+            pos, self._cell_rect(row)
+        )
         now = time.monotonic()
         prev = self._last_press
         self._last_press = (row, pos, now)
@@ -351,6 +382,63 @@ class VideoGrid(QListView):
         # QRect::bottom() already excludes the phantom extra row, so the
         # strip spans [bottom - height + 1, bottom].
         return pos.y() > cell.bottom() - SEEK_STRIP_HEIGHT
+
+    # -- drag out (move selected videos to a folder) ------------------------------
+
+    def startDrag(self, supported_actions) -> None:  # noqa: N802
+        """Drag the selected tiles out as real file URLs.
+
+        Copy *or* move, defaulting to move: a sidebar folder moves the files
+        (the window performs the move + cache migration), while a file-manager
+        window (Explorer / Finder) performs the copy/move itself.
+        ``drag_finished`` then lets the window reconcile the grid against
+        the disk for dragged-out files (a file manager may have moved them
+        out from under us).
+
+        Gesture guard first — and it must live here, not in ``canStartDrag``:
+        Qt 6 reaches ``startDrag`` straight from ``mouseMoveEvent`` (private
+        ``maybeStartDrag``) without consulting ``canStartDrag`` at all. A
+        press that began on the timeline strip is the *scrub* gesture and a
+        press on empty space belongs to the rubber band; neither may become
+        a file drag.
+        """
+        if self._closing or self._press_on_strip or self._press_row < 0:
+            return
+        rows = self.selectionModel().selectedRows()
+        paths = [
+            item.path
+            for idx in rows
+            if (item := self._model.item_at(idx.row())) is not None
+        ]
+        if not paths:
+            return
+        mime = self._model.mimeData(self.selectionModel().selectedIndexes())
+        if not mime.hasUrls():
+            mime.deleteLater()
+            return
+        self._clear_hover()  # don't keep a preview playing while dragging
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        pixmap = self._drag_pixmap()
+        if pixmap is not None:
+            drag.setPixmap(pixmap)
+            drag.setHotSpot(QPoint(pixmap.width() // 2, pixmap.height() // 2))
+        self.drag_started.emit(paths)
+        drag.exec(
+            Qt.DropAction.MoveAction | Qt.DropAction.CopyAction,
+            Qt.DropAction.MoveAction,
+        )
+        self.drag_finished.emit(paths)
+
+    def _drag_pixmap(self):
+        """A snapshot of the current tile to ride on the drag cursor."""
+        index = self.currentIndex()
+        if not index.isValid():
+            return None
+        rect = self.visualRect(index)
+        if not rect.isValid() or rect.isEmpty():
+            return None
+        return self.viewport().grab(rect)
 
     # -- keep the active preview pinned to its tile while scrolling -------------------
 

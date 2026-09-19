@@ -13,7 +13,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QAbstractListModel, QModelIndex, Qt
+from PySide6.QtCore import (
+    QAbstractListModel,
+    QModelIndex,
+    QMimeData,
+    Qt,
+    QUrl,
+)
 
 from .sorting import SortKey, SortOrder, SortValue, item_sort_key
 from .video_item import VideoItem, normalize_path
@@ -87,8 +93,41 @@ class VideoModel(QAbstractListModel):
 
     def flags(self, index: QModelIndex) -> Qt.ItemFlag:
         # Selectable: the grid drives further actions off the selection
-        # (F2 rename today). Items stay non-editable/non-draggable.
-        return Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+        # (F2 rename today). Draggable: the grid drags the selection out
+        # as file URLs (the sidebar moves them, a file manager copies or
+        # moves natively). Items stay non-editable.
+        return (
+            Qt.ItemFlag.ItemIsEnabled
+            | Qt.ItemFlag.ItemIsSelectable
+            | Qt.ItemFlag.ItemIsDragEnabled
+        )
+
+    # -- drag payload --------------------------------------------------------
+
+    def mimeTypes(self) -> list[str]:  # noqa: N802
+        return ["text/uri-list"]
+
+    def mimeData(  # noqa: N802
+        self, indexes: list[QModelIndex]
+    ) -> QMimeData:
+        """File URLs for the dragged rows (rule: real paths, not display text).
+
+        ``text/uri-list`` is what Explorer/Finder need to move or copy the
+        actual files, and what the sidebar's drop handler reads back to know
+        which videos were dragged. A plain ``QAbstractListModel`` would put
+        the DisplayRole *filename* here, which the file manager cannot
+        resolve to a source file.
+        """
+        data = QMimeData()
+        urls: list[QUrl] = []
+        for index in indexes:
+            if not index.isValid():
+                continue
+            path = self.data(index, self.PathRole)
+            if path is not None:
+                urls.append(QUrl.fromLocalFile(str(path)))
+        data.setUrls(urls)
+        return data
 
     # -- sorting ------------------------------------------------------------
 
@@ -284,6 +323,41 @@ class VideoModel(QAbstractListModel):
         if not self._resort():
             idx = self.index(row)
             self.dataChanged.emit(idx, idx, list(self._ALL_ROLES))
+
+    def remove_items(self, paths: list[Path]) -> int:
+        """Drop the rows currently holding *paths* (unknown paths skipped).
+
+        Used when a dragged file leaves the grid's scope: the tile must
+        disappear with the file, not linger as a dead ghost until the next
+        scan. Returns the number of rows removed. Contiguous runs go out
+        as one block, and blocks are processed bottom-up so a removal
+        never shifts the row numbers of the blocks still to come.
+        """
+        rows = sorted(
+            {
+                row
+                for row in (self._rows.get(normalize_path(p)) for p in paths)
+                if row is not None
+            }
+        )
+        removed = 0
+        i = len(rows)
+        while i > 0:
+            last = rows[i - 1]
+            first = last
+            while i > 1 and rows[i - 2] == first - 1:
+                i -= 1
+                first -= 1
+            self.beginRemoveRows(QModelIndex(), first, last)
+            del self._items[first : last + 1]
+            del self._keys[first : last + 1]
+            self._rows = {
+                normalize_path(it.path): row for row, it in enumerate(self._items)
+            }
+            self.endRemoveRows()
+            removed += last - first + 1
+            i -= 1
+        return removed
 
     def item_at(self, row: int) -> VideoItem | None:
         if 0 <= row < len(self._items):

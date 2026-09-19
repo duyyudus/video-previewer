@@ -310,6 +310,39 @@ class Database:
             self._conn.commit()
         return updated
 
+    def remove_scan_entries(self, paths: list[str]) -> int:
+        """Drop cached scan entries pointing at *paths* from every scan.
+
+        Used when a file moves out of its folder (drag-to-move): unlike a
+        rename there is no replacement path to write in this folder's
+        place, and a leftover entry replays the gone file as a ghost tile
+        on every reopen. Matching normalizes both sides, like
+        :meth:`rename_scan_entry`. Returns the number of entries removed.
+        """
+        self._guard()
+        doomed = {normalize_path(Path(p)) for p in paths}
+        removed = 0
+        with self._lock:
+            rows = self._conn.execute("SELECT key, entries FROM scans").fetchall()
+            for r in rows:
+                try:
+                    entries = json.loads(r["entries"])
+                except ValueError:
+                    continue
+                kept = [
+                    e
+                    for e in entries
+                    if normalize_path(Path(e.get("path", ""))) not in doomed
+                ]
+                if len(kept) != len(entries):
+                    self._conn.execute(
+                        "UPDATE scans SET entries = ? WHERE key = ?",
+                        (json.dumps(kept), r["key"]),
+                    )
+                    removed += len(entries) - len(kept)
+            self._conn.commit()
+        return removed
+
     def save_scan(self, key: str, entries: list[dict[str, Any]]) -> None:
         self._guard()
         with self._lock:

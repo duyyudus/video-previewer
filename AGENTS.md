@@ -49,13 +49,21 @@ src/video_previewer/
 │                      #   path/env helpers
 ├── open_external.py   # open a video with the OS-default player (fail soft)
 ├── ui/
-│   ├── main_window.py # MainWindow: folder selection, state, exit dialog
+│   ├── main_window.py # MainWindow: folder selection, state, exit dialog;
+│   │                  #   also owns the drag-to-move action (move files +
+│   │                  #   migrate cache + patch scan cache + update rows)
 │   ├── video_grid.py  # VideoGrid (QListView) + responsive column layout;
-│   │                  #   click/Ctrl/Shift/rubber-band selection, F2 rename
+│   │                  #   click/Ctrl/Shift/rubber-band selection, F2 rename;
+│   │                  #   drags the selection out as file URLs — a press on
+│   │                  #   the timeline strip (scrub) or on empty space
+│   │                  #   (rubber band) never becomes a drag
 │   ├── video_delegate.py  # tile painting (thumbnail + filename), hover/scrub
 │   ├── rename_dialog.py   # F2 rename: edit the stem, extension fixed
 │   ├── folder_sidebar.py  # folder tree sidebar (QTreeView + QFileSystemModel);
-│   │                  #   double-click loads a folder, single click never does
+│   │                  #   double-click loads a folder, single click never does;
+│   │                  #   accepts Move drops of file URLs onto a folder row,
+│   │                  #   highlighting the would-be target (reports to the
+│   │                  #   window; never lets QFileSystemModel move natively)
 │   └── exit_dialog.py # keep/discard prompt on close
 ├── models/
 │   ├── video_item.py  # VideoItem dataclass; video_id() = sha1(path|size|mtime)
@@ -64,7 +72,9 @@ src/video_previewer/
 │   └── video_model.py # QAbstractListModel (keeps its rows in sort order;
 │                      #   reorders with layoutChanged + remapped persistent
 │                      #   indices so the view keeps its scroll position; a
-│                      #   scan defers the reorder until it finishes)
+│                      #   scan defers the reorder until it finishes; drags
+│                      #   carry text/uri-list file URLs; remove_items drops
+│                      #   rows by path)
 ├── media/
 │   ├── metadata.py    # ffprobe probing (duration, size, vcodec)
 │   ├── thumbnailer.py # ffmpeg frame extraction (~15% into the video)
@@ -195,6 +205,28 @@ visible in the window, even if it also touches logic.
 - `scripts/render_check.py` exercises the real `MainWindow` offscreen and
   reports how many thumbnails became ready in 60 s — a quick end-to-end
   regression check.
+- Drop gate: the sidebar refuses anything but an intended move, but the
+  platform's `proposedAction` is unreliable for the grid's own drags —
+  macOS routes drags of 2+ file URLs through a native drag session
+  (`QCocoaDrag::maybeDragMultipleItems`) whose enter events can arrive
+  with Copy proposed. In-app drags (`event.source()` set) are therefore
+  accepted when Move is *possible*; external drags must propose Move.
+  `VIDEO_PREVIEWER_DEBUG_POINTER=1` also logs the sidebar's drop-gate
+  decisions (proposed/possible/source) — the fastest way to see what the
+  platform actually sent.
+- Ghost tiles: the scan-cache replay re-adds stale paths on every reopen,
+  so the model must converge with the disk somewhere — that reconciliation
+  lives in `_on_scan_finished` (rows the walk did not find are dropped) and
+  in the drag-out reconcile (dragged paths checked against existence, since
+  the executed drag action is unreliable across platforms). Keep scan caches
+  honest on moves: patch entries when the file stays in the folder
+  (`rename_scan_entry`), drop them when it leaves (`remove_scan_entries`).
+- Drag vs scrub: the gesture guard lives in `VideoGrid.startDrag` itself —
+  Qt 6 reaches `startDrag` straight from `mouseMoveEvent` (private
+  `maybeStartDrag`) **without ever calling `canStartDrag`**, so overriding
+  `canStartDrag` looks right but is never consulted. A press that began on
+  the timeline strip must fall through to scrubbing, not start a file drag
+  (`tests/test_drag_drop.py` drives the real press+move gesture to prove it).
 - Pointer/hover/scrub issues: run with `VIDEO_PREVIEWER_DEBUG_POINTER=1` —
   every viewport Move/Press/Enter/Leave (with event pos vs true cursor pos
   and the strip decision) plus every player enter/leave/autoplay/show/hide

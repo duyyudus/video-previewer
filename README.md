@@ -16,7 +16,9 @@ personal use — simple, fast, and low on resources.
   same order the user does.
 * **Folder navigation** — a toggleable sidebar (`QTreeView` over a
   directories-only `QFileSystemModel`) browses the filesystem; a single click
-  only expands a folder, a **double-click** loads it into the grid.
+  only expands a folder, a **double-click** loads it into the grid. Dragging
+  selected tiles onto a sidebar folder **moves** those video files there (the
+  cached thumbnail and metadata migrate with the file).
 * **Scanning** — folder walk runs on a worker thread and emits results in
   batches, so the grid populates incrementally while scanning continues.
   A persistent scan cache makes re-opening a folder instant.
@@ -65,6 +67,13 @@ Then click **Open Folder…** and pick a folder with videos.
   sort order once the scan ends.
 * Double-click a tile to open that video with your default player;
   double-clicking empty grid space opens the folder picker instead.
+* **Drag to move** — drag one or more selected tiles onto a folder in the
+  sidebar (the would-be target folder gets highlighted) to move the files
+  there; their cached thumbnails move with them. Dragging onto a
+  file-manager window (Explorer / Finder) copies or moves via the OS as
+  usual; after a move the grid drops the gone tiles. Pressing on a tile's
+  **timeline bar** stays a scrub gesture, so scrubbing never turns into an
+  accidental drag — grab the thumbnail to drag.
 * The **Sidebar** button shows or hides the folder tree; dragging the divider
   resizes it (both are remembered).
 * The last opened folder and the window size/position are restored on next
