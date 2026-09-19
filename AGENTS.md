@@ -195,3 +195,16 @@ visible in the window, even if it also touches logic.
 - `scripts/render_check.py` exercises the real `MainWindow` offscreen and
   reports how many thumbnails became ready in 60 s — a quick end-to-end
   regression check.
+- Pointer/hover/scrub issues: run with `VIDEO_PREVIEWER_DEBUG_POINTER=1` —
+  every viewport Move/Press/Enter/Leave (with event pos vs true cursor pos
+  and the strip decision) plus every player enter/leave/autoplay/show/hide
+  goes to the log and to `<cache_dir>/pointer_debug.log` (truncated per
+  run). Two macOS quirks the pointer code must survive: (1) a phantom
+  viewport `Leave` fires when the video surface appears under the cursor —
+  `VideoGrid` only acts on a `Leave` whose real cursor is outside the
+  viewport (`tests/test_grid_hover_leave.py`); (2) pointer events start at
+  the visible video widget despite `WA_TransparentForMouseEvents`, and Qt
+  discards button-less moves at a widget without mouse tracking — the
+  video widget + seek bar therefore `setMouseTracking(True)` so moves
+  propagate up to the grid viewport (`tests/test_player.py::
+  test_move_propagates_from_video_surface`).
