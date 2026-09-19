@@ -4,8 +4,8 @@ Minimalistic youtube-like video previewer.
 
 Browse a folder of local videos as a responsive thumbnail grid; hover a tile
 to watch a short muted preview; sweep the pointer horizontally across the
-tile to scrub through the video. Built for personal use — simple, fast, and
-low on resources.
+timeline bar at the tile's bottom edge to scrub through the video. Built for
+personal use — simple, fast, and low on resources.
 
 ## How it works
 
@@ -29,11 +29,11 @@ low on resources.
   app. Hovering a tile moves that single player's video output over the tile
   and starts muted, looping playback after a ~200 ms grace delay; leaving
   stops it and restores the static thumbnail.
-* **Scrubbing** — horizontal pointer position maps to a video timestamp
+* **Scrubbing** — inside the timeline bar at the bottom of the hovered
+  tile, the horizontal pointer position maps to a video timestamp
   (`x / width × duration`) and is applied as a throttled `setPosition`
-  (max ~30 seeks/second). A thin timeline bar with a knob (bottom of the
-  hovered tile) mirrors the pointer while you scrub and the real playback
-  position while the preview loops.
+  (max ~30 seeks/second). The bar mirrors the pointer while you scrub and
+  the real playback position while the preview loops.
 
 ## Requirements
 

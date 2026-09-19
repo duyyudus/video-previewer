@@ -7,7 +7,8 @@ Guidance for AI coding agents (and humans) working in this repository.
 A minimal, cross-platform desktop app (Windows / Linux / macOS) that browses a
 local folder of videos as a YouTube-like responsive thumbnail grid. Hovering a
 tile plays a short muted looping preview on **one shared** `QMediaPlayer`;
-sweeping the pointer horizontally across the tile scrubs the video.
+sweeping the pointer horizontally across the timeline strip at the tile's
+bottom edge scrubs the video.
 Built for personal use: simple, fast, low on resources.
 
 Python 3.12+, PySide6 (Qt 6), `ffmpeg`/`ffprobe` on `PATH`.

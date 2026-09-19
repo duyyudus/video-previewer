@@ -2,7 +2,8 @@
 
 Pointer handling (via an event filter on the viewport) maps each tile to:
   * enter  -> start hover preview (muted autoplay after a short delay)
-  * move   -> horizontal position scrubs the shared player (throttled)
+  * move   -> within the timeline strip at the tile's bottom edge, the
+    horizontal position scrubs the shared player (throttled)
   * leave  -> stop the player, restore the static thumbnail
 
 A double-click opens the tile's video with the OS-default player; on empty
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import QListView
 
 from .. import config
 from ..media.player import PreviewPlayer
+from ..media.seek_bar import WIDGET_HEIGHT as SEEK_STRIP_HEIGHT
 from ..models.video_model import VideoModel
 from ..open_external import open_externally
 from .video_delegate import VideoDelegate, cell_height
@@ -262,7 +264,9 @@ class VideoGrid(QListView):
             else:
                 self._clear_hover()
         elif row >= 0:
-            self._player.scrub(self._fraction_at(pos, self._cell_rect(row)))
+            cell = self._cell_rect(row)
+            if self._in_timeline(pos, cell):
+                self._player.scrub(self._fraction_at(pos, cell))
 
     def _clear_hover(self) -> None:
         if self._hover_row >= 0:
@@ -282,6 +286,18 @@ class VideoGrid(QListView):
         if cell.width() <= 0:
             return 0.0
         return max(0.0, min(1.0, (pos.x() - cell.left()) / cell.width()))
+
+    @staticmethod
+    def _in_timeline(pos: QPoint, cell: QRect) -> bool:
+        """True when *pos* sits in the seek-bar strip at the cell's bottom.
+
+        Matches the ``SeekBarOverlay`` geometry: pinned to the bottom edge
+        of the video widget and ``SEEK_STRIP_HEIGHT`` px tall. Scrubbing
+        outside the strip would hijack every pass over the thumbnail.
+        """
+        # QRect::bottom() already excludes the phantom extra row, so the
+        # strip spans [bottom - height + 1, bottom].
+        return pos.y() > cell.bottom() - SEEK_STRIP_HEIGHT
 
     # -- keep the active preview pinned to its tile while scrolling -------------------
 
