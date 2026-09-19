@@ -90,6 +90,19 @@ def main() -> None:
         stream=sys.stdout,  # stderr may be redirected to the log file
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    # Pointer-trace diagnostics (see VideoGrid/PreviewPlayer): also capture
+    # the app log to a file so a hover/scrub repro can be inspected after
+    # the terminal is gone.
+    if os.environ.get("VIDEO_PREVIEWER_DEBUG_POINTER"):
+        config.app_cache_dir().mkdir(parents=True, exist_ok=True)
+        handler = logging.FileHandler(
+            config.app_cache_dir() / "pointer_debug.log", mode="w",
+            encoding="utf-8",
+        )
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(name)s: %(message)s")
+        )
+        logging.getLogger("video_previewer").addHandler(handler)
     sys.exit(run())
 
 

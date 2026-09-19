@@ -14,10 +14,12 @@ tile the same way.
 
 from __future__ import annotations
 
+import logging
+import os
 import time
 
 from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, Signal
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QCursor, QGuiApplication
 from PySide6.QtWidgets import QListView
 
 from .. import config
@@ -26,6 +28,12 @@ from ..media.seek_bar import WIDGET_HEIGHT as SEEK_STRIP_HEIGHT
 from ..models.video_model import VideoModel
 from ..open_external import open_externally
 from .video_delegate import VideoDelegate, cell_height
+
+log = logging.getLogger(__name__)
+
+#: Temporary pointer-event tracing for diagnosing hover/scrub issues.
+#: Run with VIDEO_PREVIEWER_DEBUG_POINTER=1 to enable.
+_DEBUG_POINTER = bool(os.environ.get("VIDEO_PREVIEWER_DEBUG_POINTER"))
 
 
 class VideoGrid(QListView):
@@ -143,10 +151,55 @@ class VideoGrid(QListView):
         if obj is self.viewport() and not self._closing:
             etype = event.type()
             if etype == QEvent.Type.MouseMove:
-                self._on_pointer_move(event.position().toPoint())
+                pos = event.position().toPoint()
+                if _DEBUG_POINTER:
+                    index = self.indexAt(pos)
+                    row = index.row() if index.isValid() else -1
+                    strip = (
+                        self._in_timeline(pos, self._cell_rect(row))
+                        if row >= 0
+                        else None
+                    )
+                    true = self.viewport().mapFromGlobal(QCursor.pos())
+                    log.info(
+                        "ptr move pos=(%d,%d) true=(%d,%d) buttons=%d row=%d "
+                        "hover=%d strip=%s cell_bottom=%s",
+                        pos.x(), pos.y(), true.x(), true.y(),
+                        event.buttons().value,
+                        row, self._hover_row, strip,
+                        self._cell_rect(row).bottom() if row >= 0 else None,
+                    )
+                self._on_pointer_move(pos)
             elif etype == QEvent.Type.Leave:
-                self._clear_hover()
+                # macOS fires a phantom Leave at the viewport whenever the
+                # video widget's native surface appears under the cursor
+                # (AppKit re-runs enter/leave tracking around it), and again
+                # when a mouse grab ends — even though the pointer never
+                # left the grid. Trusting it killed the preview the instant
+                # it started (flicker + autoplay never firing while the
+                # pointer moved) and hid the seek bar mid-scrub. So treat
+                # Leave as provisional: only act when the real cursor has
+                # actually exited the viewport; otherwise the next MouseMove
+                # re-evaluates the row anyway.
+                inside = self.viewport().rect().contains(
+                    self.viewport().mapFromGlobal(QCursor.pos())
+                )
+                if _DEBUG_POINTER:
+                    log.info(
+                        "ptr LEAVE viewport (cursor still inside=%s, gpos=%s)"
+                        " -> %s",
+                        inside, QCursor.pos(),
+                        "ignored" if inside else "clear hover",
+                    )
+                if not inside:
+                    self._clear_hover()
+            elif etype == QEvent.Type.Enter:
+                if _DEBUG_POINTER:
+                    log.info("ptr ENTER viewport gpos=%s", QCursor.pos())
             elif etype == QEvent.Type.MouseButtonPress:
+                if _DEBUG_POINTER:
+                    p = event.position().toPoint()
+                    log.info("ptr press pos=(%d,%d)", p.x(), p.y())
                 self._on_press(event.position().toPoint())
         return super().eventFilter(obj, event)
 
