@@ -49,9 +49,13 @@ class FolderSidebar(QTreeView):
         super().__init__(parent)
         self._fs_model = QFileSystemModel(self)
         # Directories only (plus drive roots): the sidebar is a folder
-        # navigator, not a file browser. Hidden entries stay hidden.
+        # navigator, not a file browser. Include hidden folders so every
+        # location reachable through the OS is also reachable here.
         self._fs_model.setFilter(
-            QDir.Filter.Dirs | QDir.Filter.Drives | QDir.Filter.NoDotAndDotDot
+            QDir.Filter.Dirs
+            | QDir.Filter.Drives
+            | QDir.Filter.Hidden
+            | QDir.Filter.NoDotAndDotDot
         )
         # Drive roots never populate on their own (see _prime_drive_roots).
         self._prime_drive_roots()
@@ -111,8 +115,8 @@ class FolderSidebar(QTreeView):
         ``QFileSystemModel`` populates directories lazily, so ancestors of
         *path* may not exist in the model yet; each ``directoryLoaded``
         emission advances the walk one level. Best effort: if a component
-        never materialises (deleted folder, hidden ancestor, absent drive)
-        the reveal quietly stops without affecting anything else.
+        never materialises (deleted folder or absent drive), the reveal
+        quietly stops without affecting anything else.
         """
         target = Path(path)
         root_str = self._fs_model.rootPath()

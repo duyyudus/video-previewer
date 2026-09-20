@@ -47,6 +47,18 @@ def test_sidebar_lists_directories_only(qapp, tmp_path):
         qapp.processEvents()
 
 
+def test_sidebar_filter_includes_hidden_folders(qapp):
+    sidebar = FolderSidebar()
+    try:
+        filters = sidebar._fs_model.filter()
+        assert filters & QDir.Filter.Hidden
+        assert filters & QDir.Filter.Dirs
+        assert not filters & QDir.Filter.Files
+    finally:
+        sidebar.deleteLater()
+        qapp.processEvents()
+
+
 def test_drive_roots_list_their_folders(qapp):
     # Qt's QFileSystemModel leaves drive roots empty unless each root is
     # force-loaded once; the sidebar primes them at construction, so every
