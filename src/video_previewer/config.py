@@ -70,6 +70,10 @@ DEFAULTS: dict[str, Any] = {
     # Main window: fallback size (px) when no remembered geometry exists.
     "default_window_width": 1280,
     "default_window_height": 800,
+    # Toolbar search field width (px).
+    "search_box_width": 310,
+    # Pause after typing before applying the search filter (ms).
+    "search_debounce_ms": 150,
     # Folder sidebar: initial width (px) before any remembered splitter state.
     "sidebar_width": 260,
 }
@@ -104,6 +108,8 @@ SEEK_THROTTLE_MS: int
 DOUBLE_CLICK_MAX_DIST: int
 DEFAULT_WINDOW_WIDTH: int
 DEFAULT_WINDOW_HEIGHT: int
+SEARCH_BOX_WIDTH: int
+SEARCH_DEBOUNCE_MS: int
 SIDEBAR_WIDTH: int
 
 
@@ -216,7 +222,9 @@ def load_settings() -> None:
     global THUMB_CONCURRENCY, SCAN_BATCH, CELL_WIDTH, CELL_ASPECT
     global FILENAME_ROW, GRID_SPACING, MIN_COLS, MAX_COLS
     global AUTOPLAY_DELAY_MS, SEEK_THROTTLE_MS, DOUBLE_CLICK_MAX_DIST
-    global DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT, SIDEBAR_WIDTH
+    global DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT, SEARCH_BOX_WIDTH
+    global SEARCH_DEBOUNCE_MS
+    global SIDEBAR_WIDTH
 
     _settings_data.clear()
     _settings_data.update(_read_settings_file())
@@ -251,6 +259,8 @@ def load_settings() -> None:
     DOUBLE_CLICK_MAX_DIST = _num("double_click_max_dist", int, minimum=0)
     DEFAULT_WINDOW_WIDTH = _num("default_window_width", int, minimum=200)
     DEFAULT_WINDOW_HEIGHT = _num("default_window_height", int, minimum=200)
+    SEARCH_BOX_WIDTH = _num("search_box_width", int, minimum=120)
+    SEARCH_DEBOUNCE_MS = _num("search_debounce_ms", int, minimum=0)
     SIDEBAR_WIDTH = _num("sidebar_width", int, minimum=120)
 
 

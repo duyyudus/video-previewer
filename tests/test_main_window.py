@@ -7,6 +7,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QByteArray, QEvent, QSettings, QPointF, QSize, QTimer, Qt
 from PySide6.QtGui import QMouseEvent
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from conftest import pump
@@ -26,6 +27,82 @@ def _dummy_folder(tmp_path, name: str = "vids") -> Path:
 
 def _names(win: MainWindow) -> list[str]:
     return [win.model.item_at(row).filename for row in range(win.model.count())]
+
+
+def _visible_names(win: MainWindow) -> list[str]:
+    return [
+        win.model.item_at(row).filename
+        for row in range(win.model.count())
+        if not win.grid.isRowHidden(row)
+    ]
+
+
+def test_search_applies_live_enter_forces_now_and_esc_clears_filter(
+    qapp, cache_dir, tmp_path
+):
+    folder = tmp_path / "vids"
+    folder.mkdir()
+    for name in (
+        "family-holiday.mp4",
+        "holiday-cut.mkv",
+        "clip-01.mp4",
+        "clip-long.mp4",
+    ):
+        (folder / name).write_bytes(b"x" * 64)
+
+    win = MainWindow()
+    win.show()
+    try:
+        win._open_folder(folder)
+        assert pump(qapp, lambda: win.model.count() == 4, timeout=30)
+
+        search = win._search_edit
+        search.setFocus()
+        search.setText("holiday")
+        assert pump(
+            qapp,
+            lambda: _visible_names(win)
+            == ["family-holiday.mp4", "holiday-cut.mkv"],
+            timeout=2,
+        )
+        assert _visible_names(win) == ["family-holiday.mp4", "holiday-cut.mkv"]
+        assert win._status_label.text() == "2 of 4 videos"
+
+        # Enter remains an apply-now shortcut: this changes before the
+        # debounce timer gets a chance to fire.
+        search.setText("clip-??.mp4")
+        assert _visible_names(win) == ["family-holiday.mp4", "holiday-cut.mkv"]
+        QTest.keyClick(search, Qt.Key.Key_Enter)
+        qapp.processEvents()
+        assert _visible_names(win) == ["clip-01.mp4"]
+
+        # Esc clears text and filtering immediately.
+        QTest.keyClick(search, Qt.Key.Key_Escape)
+        qapp.processEvents()
+        assert search.text() == ""
+        assert _visible_names(win) == _names(win)
+        assert win._status_label.text() == "4 videos"
+    finally:
+        win.close()
+
+
+def test_active_search_filters_later_scan_rows(qapp, cache_dir, tmp_path):
+    folder = tmp_path / "vids"
+    folder.mkdir()
+    (folder / "keep-one.mp4").write_bytes(b"x" * 64)
+    (folder / "hide-one.mp4").write_bytes(b"x" * 64)
+
+    win = MainWindow()
+    win.show()
+    try:
+        win._search_edit.setText("keep*")
+        win._search_edit.returnPressed.emit()
+        win._open_folder(folder)
+        assert pump(qapp, lambda: win.model.count() == 2, timeout=30)
+        assert _visible_names(win) == ["keep-one.mp4"]
+        assert win._status_label.text() == "1 of 2 videos"
+    finally:
+        win.close()
 
 
 def test_open_folder_resets_stale_hover_state(qapp, cache_dir, tmp_path):

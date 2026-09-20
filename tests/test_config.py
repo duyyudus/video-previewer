@@ -35,6 +35,8 @@ def test_missing_settings_file_uses_defaults(tmp_path, monkeypatch):
     assert config.THUMB_POSITION_RATIO == pytest.approx(0.15)
     assert config.CELL_ASPECT == pytest.approx(9 / 16)
     assert config.SEEK_THROTTLE_MS == 33
+    assert config.SEARCH_BOX_WIDTH == 310
+    assert config.SEARCH_DEBOUNCE_MS == 150
     assert config.SUPPORTED_EXTENSIONS == frozenset(
         {".mp4", ".mkv", ".mov", ".webm", ".avi", ".m4v"}
     )
@@ -45,10 +47,13 @@ def test_settings_file_overrides_values(tmp_path, monkeypatch):
         tmp_path,
         monkeypatch,
         "thumb_width: 480\ncell_aspect: 1.0\n"
+        "search_box_width: 360\nsearch_debounce_ms: 80\n"
         "supported_extensions:\n  - MP4\n  - .ts\n",
     )
     assert config.THUMB_WIDTH == 480
     assert config.CELL_ASPECT == pytest.approx(1.0)
+    assert config.SEARCH_BOX_WIDTH == 360
+    assert config.SEARCH_DEBOUNCE_MS == 80
     # Extension entries are normalised to lowercase, dot included.
     assert config.SUPPORTED_EXTENSIONS == frozenset({".mp4", ".ts"})
     # Untouched keys keep their built-in defaults.

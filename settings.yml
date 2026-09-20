@@ -65,6 +65,10 @@ double_click_max_dist: 10
 # previous run (a remembered size/position wins over these).
 default_window_width: 1280
 default_window_height: 800
+# Width of the toolbar video search box, in pixels.
+search_box_width: 310
+# Pause after typing before applying the search filter, in milliseconds.
+search_debounce_ms: 150
 
 # --- Folder sidebar --------------------------------------------------------------
 # Initial width of the folder-navigation sidebar, in pixels (a remembered

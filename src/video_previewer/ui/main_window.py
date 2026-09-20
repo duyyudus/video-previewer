@@ -12,16 +12,31 @@ import shutil
 import time
 from collections.abc import Callable
 from enum import StrEnum
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import TypeVar
 
-from PySide6.QtCore import QCoreApplication, QSettings, QStandardPaths, Qt, QThreadPool
-from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QKeySequence
+from PySide6.QtCore import (
+    QCoreApplication,
+    QSettings,
+    QStandardPaths,
+    Qt,
+    QThreadPool,
+    QTimer,
+)
+from PySide6.QtGui import (
+    QAction,
+    QActionGroup,
+    QCloseEvent,
+    QKeySequence,
+    QShortcut,
+)
 from PySide6.QtWidgets import (
     QCheckBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMenu,
     QMessageBox,
@@ -148,6 +163,27 @@ class MainWindow(QMainWindow):
         self._folder_label.setToolTip("Currently scanned folder")
         self._recursive_chk = QCheckBox("Subfolders", self)
         self._recursive_chk.toggled.connect(self._on_recursive_toggled)
+        self._search_edit = QLineEdit(self)
+        self._search_edit.setObjectName("videoSearch")
+        self._search_edit.setFixedWidth(config.SEARCH_BOX_WIDTH)
+        self._search_edit.setPlaceholderText("Search videos (glob)")
+        self._search_edit.setToolTip(
+            "Filters filenames as you type. Supports glob patterns such as *.mp4 "
+            "and clip-??; plain text matches anywhere. Enter applies immediately; "
+            "Esc clears."
+        )
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(config.SEARCH_DEBOUNCE_MS)
+        self._search_timer.timeout.connect(self._apply_search)
+        self._search_edit.textChanged.connect(self._on_search_text_changed)
+        self._search_edit.returnPressed.connect(self._apply_search)
+        self._search_shortcut = QShortcut(
+            QKeySequence(Qt.Key.Key_Escape), self._search_edit
+        )
+        self._search_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
+        self._search_shortcut.activated.connect(self._clear_search)
+        self._search_pattern = ""
         self._sort_btn = QPushButton(self)
         self._sort_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._sort_btn.setToolTip("Sort the thumbnails by name or modification date")
@@ -159,6 +195,7 @@ class MainWindow(QMainWindow):
         bar.addWidget(self._sidebar_btn)
         bar.addWidget(self._folder_label, 0, Qt.AlignmentFlag.AlignVCenter)
         bar.addStretch(1)
+        bar.addWidget(self._search_edit)
         bar.addWidget(self._recursive_chk)
         bar.addWidget(self._sort_btn)
         bar.addWidget(self._status_label, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -175,6 +212,11 @@ class MainWindow(QMainWindow):
         self._splitter.setStretchFactor(1, 1)
         vbox.addWidget(self._splitter, 1)
         self.setCentralWidget(central)
+
+        # A search remains active while a scan streams in. Filter new rows
+        # as they arrive, then re-apply it once if sorting permutes the rows.
+        self._model.rowsInserted.connect(self._on_filter_rows_inserted)
+        self._model.layoutChanged.connect(self._refresh_search_filter)
 
         unavailable: list[str] = []
         if not config.ffmpeg_path() or not config.ffprobe_path():
@@ -347,6 +389,60 @@ class MainWindow(QMainWindow):
         if self._current_folder is not None:
             self._open_folder(self._current_folder)
 
+    # -- searching -------------------------------------------------------------
+
+    def _on_search_text_changed(self, text: str) -> None:
+        """Queue live filtering; an empty box restores every row now."""
+        self._search_timer.stop()
+        if not text:
+            self._apply_search()
+            return
+        self._search_timer.start()
+
+    def _apply_search(self) -> None:
+        """Apply the search box as a case-insensitive filename glob."""
+        self._search_timer.stop()
+        query = self._search_edit.text().strip()
+        if query and not any(char in query for char in "*?["):
+            query = f"*{query}*"
+        self._search_pattern = query.casefold()
+        self._grid.clear_hover()
+        self._grid.selectionModel().clear()
+        self._refresh_search_filter()
+        self._update_status()
+
+    def _clear_search(self) -> None:
+        """Esc in the search field clears both its text and active filter."""
+        self._search_timer.stop()
+        if self._search_edit.text():
+            self._search_edit.clear()  # textChanged applies the empty filter
+        else:
+            self._apply_search()
+
+    def _on_filter_rows_inserted(
+        self, _parent, first: int, last: int
+    ) -> None:
+        """Apply an active search only to a newly streamed scan batch."""
+        if not self._search_pattern:
+            return
+        for row in range(first, last + 1):
+            self._filter_row(row)
+
+    def _refresh_search_filter(self) -> None:
+        """Re-evaluate all row visibility after search or a row permutation."""
+        for row in range(self._model.count()):
+            self._filter_row(row)
+
+    def _filter_row(self, row: int) -> None:
+        item = self._model.item_at(row)
+        visible = item is not None and (
+            not self._search_pattern
+            or fnmatchcase(item.filename.casefold(), self._search_pattern)
+        )
+        hidden = not visible
+        if self._grid.isRowHidden(row) != hidden:
+            self._grid.setRowHidden(row, hidden)
+
     # -- drag to move ---------------------------------------------------------------
 
     def _on_drag_started(self, paths: list) -> None:
@@ -376,6 +472,7 @@ class MainWindow(QMainWindow):
             self._model.remove_items(gone)
             self._db.remove_scan_entries([p.as_posix() for p in gone])
             self._grid.clear_hover()
+            self._refresh_search_filter()
             self._update_status()
 
     def _finish_source_move(self, paths: list) -> None:
@@ -476,6 +573,7 @@ class MainWindow(QMainWindow):
                 config.APP_NAME,
                 "Could not move:\n" + "\n".join(failed),
             )
+        self._refresh_search_filter()
         self._update_status()
 
     def _stays_in_grid(self, new_path: Path) -> bool:
@@ -601,6 +699,7 @@ class MainWindow(QMainWindow):
             self._model.remove_items(stale)
             self._grid.clear_hover()
         self._model.set_layout_deferred(False)  # settle into the sort order
+        self._refresh_search_filter()
         self._update_status()
 
     def _on_scan_error(self, message: str) -> None:
@@ -611,6 +710,12 @@ class MainWindow(QMainWindow):
 
     def _update_status(self) -> None:
         n = self._model.count()
+        if self._search_pattern:
+            shown = sum(not self._grid.isRowHidden(row) for row in range(n))
+            self._status_label.setText(
+                f"{shown} of {n} video{'s' if n != 1 else ''}"
+            )
+            return
         self._status_label.setText(f"{n} video{'s' if n != 1 else ''}")
 
     # -- thumbnail results --------------------------------------------------------------
@@ -690,6 +795,7 @@ class MainWindow(QMainWindow):
             self._cache.remove_items(deleted)
             self._db.remove_scan_entries([path.as_posix() for path in paths])
             self._model.remove_items(paths)
+            self._refresh_search_filter()
             self._update_status()
             log.info(
                 "%s %d video(s)",
@@ -777,6 +883,7 @@ class MainWindow(QMainWindow):
         self._model.rename_item(row, new_item)
         if not new_item.thumb_ready:
             self._thumbs.request(new_item)
+        self._refresh_search_filter()
         self._update_status()
 
     # -- shutdown ------------------------------------------------------------------------
