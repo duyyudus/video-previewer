@@ -446,7 +446,10 @@ def test_sidebar_drop_reports_folder_and_files(qapp, tmp_path):
         )
         sidebar.dropEvent(ev)
         assert ev.isAccepted()
-        assert received == [(["/tmp/x.mp4", "/tmp/y.mp4"], str(alpha))]
+        assert len(received) == 1
+        paths, folder = received[0]
+        assert paths == ["/tmp/x.mp4", "/tmp/y.mp4"]
+        assert Path(folder) == alpha
         assert not sidebar._drop_row.isValid()  # highlight cleared after drop
     finally:
         sidebar.deleteLater()
@@ -664,7 +667,9 @@ def test_in_app_drag_gate_ignores_copy_proposal(qapp, tmp_path):
             source=grid,
         )
         folder, hit = sidebar._drop_hit(fake)
-        assert folder == str(alpha) and hit.isValid()
+        assert folder is not None
+        assert Path(folder) == alpha
+        assert hit.isValid()
 
         # An external drag (no in-app source) proposing Copy stays refused:
         # moving where a copy was offered would eat the source files.
