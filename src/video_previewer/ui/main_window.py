@@ -341,9 +341,11 @@ class MainWindow(QMainWindow):
         self._drop_handled_internally = True
         self._move_videos([Path(p) for p in paths], Path(folder))
 
-    def _on_drag_finished(self, paths: list) -> None:
+    def _on_drag_finished(self, paths: list, action: Qt.DropAction) -> None:
         if self._closing or self._drop_handled_internally:
             return
+        if action == Qt.DropAction.MoveAction:
+            self._finish_source_move(paths)
         # The drop left the app: a file manager copied or moved the files
         # itself. The executed action is a poor signal across platforms
         # (Finder defaults drags to copy, and even a move can land back as
@@ -357,6 +359,33 @@ class MainWindow(QMainWindow):
             self._db.remove_scan_entries([p.as_posix() for p in gone])
             self._grid.clear_hover()
             self._update_status()
+
+    def _finish_source_move(self, paths: list) -> None:
+        """Delete originals after a drag target accepted a source-side move.
+
+        Qt's drag contract makes the source responsible for removing its data
+        when ``QDrag.exec()`` returns ``MoveAction``. Explorer can implement
+        that by copying the files to the destination and returning the move
+        result, leaving this source to finish the operation. A plain
+        ``CopyAction`` never lands here. Neither does Windows-only
+        ``TargetMoveAction``: that value explicitly transfers ownership to
+        the target and tells the source *not* to delete its data.
+
+        The tiles themselves go in the reconciliation that follows, which
+        sees the files are gone.
+        """
+        for p in paths:
+            src = Path(p)
+            try:
+                src.unlink()
+            except FileNotFoundError:
+                continue  # an optimized move after all
+            except OSError as exc:
+                log.warning(
+                    "could not delete %s after a drag-out move: %s",
+                    src,
+                    exc.strerror or exc,
+                )
 
     def _move_videos(self, paths: list[Path], target: Path) -> None:
         """Move the given files into *target*, migrating caches and rows.

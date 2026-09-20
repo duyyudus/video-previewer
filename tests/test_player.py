@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import shutil
+
 from PySide6.QtCore import QRect
 
 from video_previewer.media.player import PreviewPlayer, seek_ms
+from conftest import make_video, pump
 
 
 def test_seek_ms_math():
@@ -40,6 +43,40 @@ def test_player_lifecycle_offscreen(qapp):
 
         # let any queued autoplay/error signals run; nothing may crash
         qapp.processEvents()
+    finally:
+        player.deleteLater()
+        host.deleteLater()
+
+
+def test_leave_releases_the_previewed_file(qapp, tmp_path):
+    """Stopping the preview must also close the file.
+
+    ``QMediaPlayer.stop()`` leaves the media loaded, and Windows refuses to
+    rename or move a file any process still holds open: drag-to-move onto a
+    sidebar folder (and F2 rename) failed with "the process cannot access
+    the file because it is being used by another process", and a drag out to
+    Explorer copied the file but could not delete the original. Only
+    clearing the source releases the handle.
+    """
+    from PySide6.QtWidgets import QWidget
+
+    src = make_video(tmp_path / "clip.mp4", seconds=2)
+    target = tmp_path / "dest"
+    target.mkdir()
+
+    host = QWidget()
+    player = PreviewPlayer(host)
+    try:
+        player.enter(str(src), QRect(10, 10, 220, 154))
+        # wait for the delayed autoplay to actually load the file
+        assert pump(qapp, lambda: not player.media_source.isEmpty(), timeout=10)
+        pump(qapp, lambda: False, timeout=0.5)  # let the demuxer open it
+
+        player.leave()
+        assert player.media_source.isEmpty()
+        # the real assertion on Windows: the file is movable again
+        shutil.move(str(src), str(target / src.name))
+        assert (target / src.name).exists()
     finally:
         player.deleteLater()
         host.deleteLater()

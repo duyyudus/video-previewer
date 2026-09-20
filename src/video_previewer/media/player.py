@@ -191,6 +191,17 @@ class PreviewPlayer(QObject):
         self._player.stop()
         self._seekbar.hide()
         self._video.hide()
+        # Release the file itself, not just playback. Windows keeps the
+        # previewed video locked ("the process cannot access the file
+        # because it is being used by another process") for as long as a
+        # source is set; ``stop()`` alone leaves the media loaded and the
+        # handle open, so renaming the file, moving it into a sidebar
+        # folder, or letting Explorer finish a drag-out move all fail with
+        # a sharing violation. Clearing the source ceases all I/O on the
+        # media and drops the handle synchronously; the next hover reloads
+        # it anyway.
+        self._player.setSource(QUrl())
+        self._source_gen = -1  # nothing loaded: in-flight signals are stale
 
     def _apply_seek(self) -> None:
         ms = self._pending_seek_ms
@@ -259,6 +270,11 @@ class PreviewPlayer(QObject):
     @property
     def active_path(self) -> str | None:
         return self._path
+
+    @property
+    def media_source(self) -> QUrl:
+        """The URL loaded in the shared player (empty once released)."""
+        return self._player.source()
 
     @property
     def video_widget(self) -> QVideoWidget:

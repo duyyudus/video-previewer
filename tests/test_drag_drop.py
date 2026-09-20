@@ -4,6 +4,7 @@ move reconciles the grid."""
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QMimeData, QModelIndex, QPoint, QPointF, Qt, QUrl
@@ -175,6 +176,7 @@ def test_remove_items_drops_rows_and_reindexes():
 def test_strip_press_never_starts_a_drag(qapp, cache_dir, tmp_path, monkeypatch):
     folder = _dummy_folder(tmp_path)
     fake = _install_fake_drag(monkeypatch)
+    monkeypatch.setattr(video_grid_mod, "_IS_WINDOWS", True)
     win = MainWindow()
     win.show()
     try:
@@ -197,6 +199,9 @@ def test_strip_press_never_starts_a_drag(qapp, cache_dir, tmp_path, monkeypatch)
         assert [Path(u.toLocalFile()) for u in drag.mime.urls()] == [
             folder / "a.mp4"
         ]
+        assert drag.mime.data(video_grid_mod._PREFERRED_DROP_EFFECT) == (
+            video_grid_mod._DROPEFFECT_MOVE
+        )
         assert drag.executed == (
             Qt.DropAction.MoveAction | Qt.DropAction.CopyAction,
             Qt.DropAction.MoveAction,
@@ -272,6 +277,120 @@ def test_copy_out_keeps_tiles(qapp, cache_dir, tmp_path, monkeypatch):
         assert pump(qapp, lambda: win.model.count() == 2, timeout=30)
         _press_drag(win.grid, _row_center(win, 0))
         assert win.model.count() == 2
+    finally:
+        win.close()
+
+
+def test_move_action_deletes_the_originals(qapp, cache_dir, tmp_path, monkeypatch):
+    # Explorer may copy the files into the drop folder and return MoveAction,
+    # leaving the source app to delete the originals. Without that final step
+    # the drag-out leaves a duplicate behind.
+    folder = _dummy_folder(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    fake = _install_fake_drag(monkeypatch)
+    fake.result = Qt.DropAction.MoveAction
+
+    def copy_out(_source) -> None:  # what Explorer does on drop
+        shutil.copy2(folder / "a.mp4", elsewhere / "a.mp4")
+
+    fake.on_exec = copy_out
+    win = MainWindow()
+    win.show()
+    try:
+        win._open_folder(folder)
+        assert pump(qapp, lambda: win.model.count() == 2, timeout=30)
+        key = win._db.scan_key(folder, False)
+        assert pump(qapp, lambda: win._db.load_scan(key) is not None, timeout=30)
+
+        _press_drag(win.grid, _row_center(win, 0))
+
+        assert not (folder / "a.mp4").exists()  # the move is completed
+        assert (elsewhere / "a.mp4").exists()  # Explorer's copy is untouched
+        assert win.model.count() == 1
+        assert win.model.item_at(0).filename == "b.mp4"
+        entries = win._db.load_scan(key)
+        assert [Path(e["path"]).name for e in entries] == ["b.mp4"]
+    finally:
+        win.close()
+
+
+def test_copy_out_never_deletes_the_originals(qapp, cache_dir, tmp_path, monkeypatch):
+    # Ctrl-drag (or Explorer simply deciding on a copy) comes back as
+    # CopyAction: the originals must survive. Only MoveAction asks the source
+    # to delete a file.
+    folder = _dummy_folder(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    fake = _install_fake_drag(monkeypatch)
+    fake.result = Qt.DropAction.CopyAction
+    fake.on_exec = lambda _source: shutil.copy2(
+        folder / "a.mp4", elsewhere / "a.mp4"
+    )
+    win = MainWindow()
+    win.show()
+    try:
+        win._open_folder(folder)
+        assert pump(qapp, lambda: win.model.count() == 2, timeout=30)
+        _press_drag(win.grid, _row_center(win, 0))
+        assert (folder / "a.mp4").exists()
+        assert win.model.count() == 2
+    finally:
+        win.close()
+
+
+def test_target_move_never_deletes_the_originals(qapp, cache_dir, tmp_path,
+                                                 monkeypatch):
+    # On Windows, TargetMoveAction transfers ownership to the target and
+    # explicitly tells the source not to delete its data.
+    folder = _dummy_folder(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    fake = _install_fake_drag(monkeypatch)
+    fake.result = Qt.DropAction.TargetMoveAction
+    fake.on_exec = lambda _source: shutil.copy2(
+        folder / "a.mp4", elsewhere / "a.mp4"
+    )
+    win = MainWindow()
+    win.show()
+    try:
+        win._open_folder(folder)
+        assert pump(qapp, lambda: win.model.count() == 2, timeout=30)
+        _press_drag(win.grid, _row_center(win, 0))
+        assert (folder / "a.mp4").exists()
+        assert win.model.count() == 2
+    finally:
+        win.close()
+
+
+def test_sidebar_drop_is_never_deleted_as_an_external_move(
+    qapp, cache_dir, tmp_path, monkeypatch
+):
+    # The sidebar handled the drop itself (the file already lives in the
+    # target folder). Even if the platform then reports MoveAction,
+    # the window must not "complete" anything: the moved file would be
+    # deleted out from under the user.
+    root = tmp_path / "root"
+    vids = root / "vids"
+    other = root / "other"
+    vids.mkdir(parents=True)
+    other.mkdir()
+    (vids / "a.mp4").write_bytes(b"x" * 64)
+    (vids / "b.mp4").write_bytes(b"y" * 64)
+    fake = _install_fake_drag(monkeypatch)
+    fake.result = Qt.DropAction.MoveAction
+    win = MainWindow()
+    win.show()
+    try:
+        win._open_folder(vids)
+        assert pump(qapp, lambda: win.model.count() == 2, timeout=30)
+        fake.on_exec = lambda _source: win.sidebar.files_dropped.emit(
+            [str(vids / "a.mp4")], str(other)
+        )
+        _press_drag(win.grid, _row_center(win, 0))
+
+        assert (other / "a.mp4").exists()  # the sidebar move survives
+        assert win.model.count() == 1
     finally:
         win.close()
 

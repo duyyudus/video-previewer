@@ -16,9 +16,10 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import time
 
-from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, Signal
+from PySide6.QtCore import QByteArray, QEvent, QPoint, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QCursor, QDrag, QGuiApplication
 from PySide6.QtWidgets import QAbstractItemView, QListView
 
@@ -35,6 +36,16 @@ log = logging.getLogger(__name__)
 #: Run with VIDEO_PREVIEWER_DEBUG_POINTER=1 to enable.
 _DEBUG_POINTER = bool(os.environ.get("VIDEO_PREVIEWER_DEBUG_POINTER"))
 
+# QDrag's default action is not enough to override Explorer's contextual
+# copy/move choice (notably across volumes). This native clipboard format is
+# how a Windows drag source explicitly asks the Shell for a move. Its payload
+# is a little-endian DWORD containing DROPEFFECT_MOVE (2).
+_IS_WINDOWS = sys.platform == "win32"
+_PREFERRED_DROP_EFFECT = (
+    'application/x-qt-windows-mime;value="Preferred DropEffect"'
+)
+_DROPEFFECT_MOVE = QByteArray(b"\x02\x00\x00\x00")
+
 
 class VideoGrid(QListView):
     #: Emitted when the user double-clicks empty grid space (no video tile
@@ -48,10 +59,12 @@ class VideoGrid(QListView):
     #: latch so it can tell a sidebar drop from a file-manager drop below.
     drag_started = Signal(list)
     #: A tile drag ended without the sidebar handling it: the files were
-    #: dropped on a file manager, which copied/moved them itself. The window
-    #: reconciles the grid against the disk (the executed action is not a
-    #: reliable signal across platforms, so existence is).
-    drag_finished = Signal(list)
+    #: dropped on a file manager, which copied/moved them itself. Carries the
+    #: source paths and the action the drag actually executed. The window
+    #: reconciles the grid against the disk (the action is not a reliable
+    #: signal across platforms, so existence is) and completes a source-side
+    #: move when ``QDrag.exec()`` returns ``MoveAction``.
+    drag_finished = Signal(list, Qt.DropAction)
 
     def __init__(self, model: VideoModel, parent=None) -> None:
         super().__init__(parent)
@@ -416,7 +429,19 @@ class VideoGrid(QListView):
         if not mime.hasUrls():
             mime.deleteLater()
             return
+        if _IS_WINDOWS:
+            # Tell Explorer this is a move at the native Shell layer. Without
+            # CFSTR_PREFERREDDROPEFFECT it may choose CopyAction despite the
+            # MoveAction default passed to QDrag.exec(), leaving originals.
+            mime.setData(_PREFERRED_DROP_EFFECT, _DROPEFFECT_MOVE)
         self._clear_hover()  # don't keep a preview playing while dragging
+        if self._player is not None:
+            # Release the previewed file before the drag starts: on Windows
+            # a loaded source keeps it locked, so Explorer would copy the
+            # dragged file and then fail to delete the original ("in use").
+            # ``_clear_hover`` only reaches the player while a tile is
+            # hovered, so ask for the release unconditionally.
+            self._player.leave()
         drag = QDrag(self)
         drag.setMimeData(mime)
         pixmap = self._drag_pixmap()
@@ -424,11 +449,13 @@ class VideoGrid(QListView):
             drag.setPixmap(pixmap)
             drag.setHotSpot(QPoint(pixmap.width() // 2, pixmap.height() // 2))
         self.drag_started.emit(paths)
-        drag.exec(
+        executed = drag.exec(
             Qt.DropAction.MoveAction | Qt.DropAction.CopyAction,
             Qt.DropAction.MoveAction,
         )
-        self.drag_finished.emit(paths)
+        if _DEBUG_POINTER:
+            log.info("drag executed action=%s for %d file(s)", executed, len(paths))
+        self.drag_finished.emit(paths, executed)
 
     def _drag_pixmap(self):
         """A snapshot of the current tile to ride on the drag cursor."""

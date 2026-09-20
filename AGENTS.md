@@ -214,6 +214,28 @@ visible in the window, even if it also touches logic.
   `VIDEO_PREVIEWER_DEBUG_POINTER=1` also logs the sidebar's drop-gate
   decisions (proposed/possible/source) — the fastest way to see what the
   platform actually sent.
+- "File in use" on Windows: `QMediaPlayer.stop()` keeps the media loaded
+  and Windows locks a file any process holds open, so a previewed video
+  could not be renamed, moved into a sidebar folder, or moved out by
+  Explorer (which copied it, then failed to delete the original).
+  `PreviewPlayer._stop_playback` therefore clears the source
+  (`setSource(QUrl())`), which drops the handle synchronously, and
+  `VideoGrid.startDrag` asks for that release before `drag.exec` —
+  `_clear_hover` alone only reaches the player while a tile is hovered.
+  Any new code that moves or deletes a video must release the player
+  first (`tests/test_player.py::test_leave_releases_the_previewed_file`).
+- Drag out to Explorer (Windows): a drop target may complete a move in two
+  ways. An *optimized* move has the target move the file itself; an
+  *unoptimized* one has it copy the file and report
+  `CFSTR_PERFORMEDDROPEFFECT = DROPEFFECT_MOVE` back through the data
+  object, which obliges the **source** to delete the original. The drag's
+  MIME data advertises `CFSTR_PREFERREDDROPEFFECT = DROPEFFECT_MOVE` so
+  Explorer negotiates a move even when its contextual default is copy.
+  Explorer can take the unoptimized route, so `MainWindow._finish_source_move` deletes
+  the dragged files when `drag.exec` returns `Qt.MoveAction`. On Windows,
+  `Qt.TargetMoveAction` says the target took ownership and the source must
+  **not** delete; a plain `CopyAction` must not delete anything either.
+  `VIDEO_PREVIEWER_DEBUG_POINTER=1` logs the executed action per drag.
 - Ghost tiles: the scan-cache replay re-adds stale paths on every reopen,
   so the model must converge with the disk somewhere — that reconciliation
   lives in `_on_scan_finished` (rows the walk did not find are dropped) and
