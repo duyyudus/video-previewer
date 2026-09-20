@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TypeVar
 
 from PySide6.QtCore import QCoreApplication, QSettings, QStandardPaths, Qt, QThreadPool
-from PySide6.QtGui import QAction, QActionGroup, QCloseEvent
+from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
     QFileDialog,
@@ -90,6 +90,10 @@ class MainWindow(QMainWindow):
         # folder into the grid through the same funnel as the picker.
         self._sidebar = FolderSidebar(self)
         self._sidebar.folder_activated.connect(self._on_sidebar_folder_activated)
+        self._rescan_action = QAction("Rescan Folder", self)
+        self._rescan_action.setShortcut(QKeySequence("F5"))
+        self._rescan_action.triggered.connect(self._rescan_current_folder)
+        self.addAction(self._rescan_action)
         # Drag-to-move: a drop on a sidebar folder moves the files here
         # (cache + scan migrate); a drag that ends elsewhere and executes a
         # Move means a file manager moved the files out on disk, so the grid
@@ -337,6 +341,11 @@ class MainWindow(QMainWindow):
     def _on_sidebar_folder_activated(self, path: str) -> None:
         """Load the double-clicked sidebar folder through the shared funnel."""
         self._open_folder(Path(path))
+
+    def _rescan_current_folder(self) -> None:
+        """F5: reload the current folder just like activating it in the sidebar."""
+        if self._current_folder is not None:
+            self._open_folder(self._current_folder)
 
     # -- drag to move ---------------------------------------------------------------
 

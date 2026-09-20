@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QModelIndex, QDir
+from PySide6.QtCore import QModelIndex, QDir, Qt
+from PySide6.QtTest import QTest
 
 from conftest import pump
 from video_previewer import config
@@ -100,6 +101,27 @@ def test_double_click_scans_folder(qapp, cache_dir, tmp_path):
         assert win._settings.value(config.SETTING_LAST_FOLDER) == str(alpha)
         # opening a folder always ends with its children revealed
         assert win.sidebar.isExpanded(_index(win.sidebar, alpha))
+    finally:
+        win.close()
+
+
+def test_f5_rescans_current_folder(qapp, cache_dir, tmp_path):
+    root, alpha, beta = _tree(tmp_path)
+    win = MainWindow()
+    win.show()
+    try:
+        win.sidebar.set_root(root)
+        assert pump(qapp, lambda: _index(win.sidebar, alpha).isValid(), timeout=30)
+        win.sidebar.doubleClicked.emit(_index(win.sidebar, alpha))
+        assert pump(qapp, lambda: win.model.count() == 2, timeout=30)
+
+        (alpha / "new.mp4").write_bytes(b"new" * 64)
+        previous_generation = win._scan_gen
+        QTest.keyClick(win, Qt.Key.Key_F5)
+
+        assert pump(qapp, lambda: win._scan_gen > previous_generation)
+        assert pump(qapp, lambda: win.model.count() == 3, timeout=30)
+        assert win._folder_label.text() == str(alpha)
     finally:
         win.close()
 
