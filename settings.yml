@@ -58,6 +58,10 @@ grid_spacing: 8
 # Minimum and maximum number of columns.
 min_cols: 2
 max_cols: 10
+# Compact translucent label carried beside the pointer during a video drag.
+# Unlike a full tile snapshot, this leaves sidebar folder targets visible.
+drag_preview_width: 160
+drag_preview_height: 28
 
 # --- Hover preview playback ---------------------------------------------------------
 # Grace period before a hover starts playback, in ms.

@@ -38,6 +38,8 @@ def test_missing_settings_file_uses_defaults(tmp_path, monkeypatch):
     assert config.SEEK_THROTTLE_MS == 33
     assert config.SEARCH_BOX_WIDTH == 310
     assert config.SEARCH_DEBOUNCE_MS == 150
+    assert config.DRAG_PREVIEW_WIDTH == 160
+    assert config.DRAG_PREVIEW_HEIGHT == 28
     assert config.SUPPORTED_EXTENSIONS == frozenset(
         {".mp4", ".mkv", ".mov", ".webm", ".avi", ".m4v"}
     )
@@ -164,5 +166,7 @@ def test_shipped_settings_yaml_is_sane():
     assert config.MIN_COLS <= config.MAX_COLS
     assert config.MIN_COLS >= 1
     assert config.SEEK_THROTTLE_MS >= 1
+    assert config.DRAG_PREVIEW_WIDTH >= 48
+    assert config.DRAG_PREVIEW_HEIGHT >= 16
     assert config.SUPPORTED_EXTENSIONS
     assert all(e.startswith(".") for e in config.SUPPORTED_EXTENSIONS)

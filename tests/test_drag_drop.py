@@ -7,7 +7,16 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QMimeData, QModelIndex, QPoint, QPointF, Qt, QUrl
+from PySide6.QtCore import (
+    QEvent,
+    QMimeData,
+    QModelIndex,
+    QPoint,
+    QPointF,
+    QSize,
+    Qt,
+    QUrl,
+)
 from PySide6.QtGui import (
     QDragEnterEvent,
     QDragLeaveEvent,
@@ -108,6 +117,8 @@ class _FakeDrag:
     def __init__(self, source) -> None:
         self.source = source
         self.mime: QMimeData | None = None
+        self.pixmap = None
+        self.hotspot = None
         self.executed: tuple | None = None
         _FakeDrag.created.append(self)
 
@@ -115,10 +126,10 @@ class _FakeDrag:
         self.mime = mime
 
     def setPixmap(self, pixmap) -> None:  # noqa: N802
-        pass
+        self.pixmap = pixmap
 
     def setHotSpot(self, pos) -> None:  # noqa: N802
-        pass
+        self.hotspot = pos
 
     def exec(self, actions, default) -> Qt.DropAction:
         self.executed = (actions, default)
@@ -205,6 +216,22 @@ def test_strip_press_never_starts_a_drag(qapp, cache_dir, tmp_path, monkeypatch)
         assert drag.executed == (
             Qt.DropAction.MoveAction | Qt.DropAction.CopyAction,
             Qt.DropAction.MoveAction,
+        )
+        assert drag.pixmap.size() == QSize(
+            video_grid_mod.config.DRAG_PREVIEW_WIDTH,
+            video_grid_mod.config.DRAG_PREVIEW_HEIGHT,
+        )
+        tile_height = win.grid.visualRect(win.model.index(0)).height()
+        assert drag.pixmap.height() < tile_height
+        # Every painted pixel remains at least slightly translucent, allowing
+        # the sidebar target highlight to show through the drag label.
+        assert max(
+            drag.pixmap.toImage().pixelColor(x, y).alpha()
+            for x in range(drag.pixmap.width())
+            for y in range(drag.pixmap.height())
+        ) < 255
+        assert drag.hotspot == QPoint(
+            drag.pixmap.width() // 2, drag.pixmap.height() // 2
         )
     finally:
         win.close()

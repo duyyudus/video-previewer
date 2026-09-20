@@ -65,6 +65,10 @@ DEFAULTS: dict[str, Any] = {
     "grid_spacing": 8,
     "min_cols": 2,
     "max_cols": 10,
+    # Compact label shown beside the pointer while dragging videos.  Keeping
+    # this much smaller than a tile leaves sidebar drop targets visible.
+    "drag_preview_width": 160,
+    "drag_preview_height": 28,
     # Hover preview playback: grace period before autoplay (ms); minimum
     # gap between seeks (ms, ~30 seeks/second maximum).
     "autoplay_delay_ms": 200,
@@ -108,6 +112,8 @@ FILENAME_ROW: int
 GRID_SPACING: int
 MIN_COLS: int
 MAX_COLS: int
+DRAG_PREVIEW_WIDTH: int
+DRAG_PREVIEW_HEIGHT: int
 AUTOPLAY_DELAY_MS: int
 SEEK_THROTTLE_MS: int
 DOUBLE_CLICK_MAX_DIST: int
@@ -276,6 +282,7 @@ def load_settings() -> None:
     global THUMB_FALLBACK_SECONDS, THUMB_EXTRACT_TIMEOUT, PROBE_TIMEOUT
     global THUMB_CONCURRENCY, SCAN_BATCH, CELL_WIDTH, CELL_ASPECT
     global FILENAME_ROW, GRID_SPACING, MIN_COLS, MAX_COLS
+    global DRAG_PREVIEW_WIDTH, DRAG_PREVIEW_HEIGHT
     global AUTOPLAY_DELAY_MS, SEEK_THROTTLE_MS, DOUBLE_CLICK_MAX_DIST
     global DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT, SEARCH_BOX_WIDTH
     global SEARCH_DEBOUNCE_MS
@@ -308,6 +315,8 @@ def load_settings() -> None:
             MIN_COLS,
         )
         MAX_COLS = MIN_COLS
+    DRAG_PREVIEW_WIDTH = _num("drag_preview_width", int, minimum=48)
+    DRAG_PREVIEW_HEIGHT = _num("drag_preview_height", int, minimum=16)
     AUTOPLAY_DELAY_MS = _num("autoplay_delay_ms", int, minimum=0)
     # Floor of 1 ms: 0 would disable the throttle entirely (rule 5 caps
     # scrubbing at ~30 setPosition/s), so it is clamped rather than allowed.

@@ -20,7 +20,15 @@ import sys
 import time
 
 from PySide6.QtCore import QByteArray, QEvent, QPoint, QRect, QSize, Qt, Signal
-from PySide6.QtGui import QCursor, QDrag, QGuiApplication
+from PySide6.QtGui import (
+    QCursor,
+    QDrag,
+    QFontMetrics,
+    QGuiApplication,
+    QPainter,
+    QPen,
+    QPixmap,
+)
 from PySide6.QtWidgets import QAbstractItemView, QListView
 
 from .. import config
@@ -454,7 +462,7 @@ class VideoGrid(QListView):
             self._player.leave()
         drag = QDrag(self)
         drag.setMimeData(mime)
-        pixmap = self._drag_pixmap()
+        pixmap = self._drag_pixmap(len(paths))
         if pixmap is not None:
             drag.setPixmap(pixmap)
             drag.setHotSpot(QPoint(pixmap.width() // 2, pixmap.height() // 2))
@@ -467,15 +475,58 @@ class VideoGrid(QListView):
             log.info("drag executed action=%s for %d file(s)", executed, len(paths))
         self.drag_finished.emit(paths, executed)
 
-    def _drag_pixmap(self):
-        """A snapshot of the current tile to ride on the drag cursor."""
+    def _drag_pixmap(self, selected_count: int) -> QPixmap | None:
+        """Return a slim, translucent label to ride on the drag cursor.
+
+        A grabbed tile is almost as wide as the sidebar and hides its target
+        highlight.  This deliberately carries only the filename (and an
+        optional selection count), keeping the drag identity useful without
+        obscuring the folder tree.
+        """
         index = self.currentIndex()
         if not index.isValid():
             return None
-        rect = self.visualRect(index)
-        if not rect.isValid() or rect.isEmpty():
+        item = self._model.item_at(index.row())
+        if item is None:
             return None
-        return self.viewport().grab(rect)
+
+        width = config.DRAG_PREVIEW_WIDTH
+        height = config.DRAG_PREVIEW_HEIGHT
+        pixmap = QPixmap(width, height)
+        pixmap.fill(Qt.GlobalColor.transparent)
+
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        palette = self.palette()
+        background = palette.base().color()
+        background.setAlpha(210)
+        border = palette.highlight().color()
+        border.setAlpha(225)
+        text_color = palette.text().color()
+        text_color.setAlpha(245)
+
+        pill = pixmap.rect().adjusted(1, 1, -1, -1)
+        painter.setPen(QPen(border, 1))
+        painter.setBrush(background)
+        painter.drawRoundedRect(pill, height // 2, height // 2)
+
+        label = item.filename
+        if selected_count > 1:
+            label = f"{label}  +{selected_count - 1}"
+        text_rect = pill.adjusted(9, 0, -9, 0)
+        painter.setFont(self.font())
+        metrics = QFontMetrics(painter.font())
+        label = metrics.elidedText(
+            label, Qt.TextElideMode.ElideMiddle, text_rect.width()
+        )
+        painter.setPen(text_color)
+        painter.drawText(
+            text_rect,
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            label,
+        )
+        painter.end()
+        return pixmap
 
     # -- keep the active preview pinned to its tile while scrolling -------------------
 
