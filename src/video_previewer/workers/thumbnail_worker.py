@@ -77,6 +77,15 @@ class _ThumbJob(QRunnable):
                         probe.height if probe else None,
                         probe.vcodec if probe else None,
                     )
+                    if not item.path.exists():
+                        # The file was deleted/renamed after ffmpeg produced
+                        # the JPEG but before this job could publish it. The
+                        # window may already have cleaned the old identity;
+                        # retire this late write so it cannot strand a cache
+                        # row or thumbnail after a folder switch/close.
+                        self._cache.remove_items([item])
+                        self._signals.failed.emit(str(item.path))
+                        return
                 except sqlite3.ProgrammingError:
                     # App is shutting down (DB closed). The thumbnail file
                     # itself was written; the DB row is re-created on the next
@@ -161,6 +170,16 @@ class ThumbnailQueue(QObject):
         slot — but work for the abandoned folder never starts.
         """
         self._pending.clear()
+
+    def cancel_pending(self, items: list[VideoItem]) -> None:
+        """Drop queued work for files removed from the current folder.
+
+        Jobs already running must finish to return their pool slots. Their
+        ready signal lets the window remove any cache row written during a
+        deletion race.
+        """
+        for item in items:
+            self._pending.pop(item.vid, None)
 
     def pending_count(self) -> int:
         """Jobs still queued or in flight (used to drain before shutdown)."""

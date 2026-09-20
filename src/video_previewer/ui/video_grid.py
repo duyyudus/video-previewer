@@ -54,6 +54,9 @@ class VideoGrid(QListView):
     #: Emitted on F2 while one or more tiles are selected; the window runs
     #: the rename action on the current selection.
     rename_requested = Signal()
+    #: Emitted on Delete while tiles are selected. True means Shift+Delete
+    #: requested permanent deletion; False means move to the system trash.
+    delete_requested = Signal(bool)
     #: A tile drag began with these source paths (before the modal drag
     #: loop runs). The window uses this to reset its "drop handled internally"
     #: latch so it can tell a sidebar drop from a file-manager drop below.
@@ -105,8 +108,8 @@ class VideoGrid(QListView):
         self.setUniformItemSizes(True)
         self.setMovement(QListView.Movement.Static)
         # Click / Ctrl+click / Shift+click / rubber band select tiles; the
-        # window runs actions (F2 rename) off this selection. Focus lets the
-        # grid receive the key presses those actions use.
+        # window runs actions (F2 rename, Delete) off this selection. Focus
+        # lets the grid receive the key presses those actions use.
         self.setSelectionMode(QListView.SelectionMode.ExtendedSelection)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -247,6 +250,13 @@ class VideoGrid(QListView):
         if event.key() == Qt.Key.Key_F2:
             if self.selectionModel().hasSelection():
                 self.rename_requested.emit()
+            return
+        if event.key() == Qt.Key.Key_Delete:
+            if self.selectionModel().hasSelection():
+                permanent = bool(
+                    event.modifiers() & Qt.KeyboardModifier.ShiftModifier
+                )
+                self.delete_requested.emit(permanent)
             return
         if event.key() == Qt.Key.Key_Escape:
             # Escape clears the selection (Explorer-like); never steal it

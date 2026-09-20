@@ -67,6 +67,9 @@ Then click **Open Folder…** and pick a folder with videos.
   sort order once the scan ends.
 * Double-click a tile to open that video with your default player;
   double-clicking empty grid space opens the folder picker instead.
+* Select one or more tiles and press **Delete** to move their files to the
+  system Trash/Recycle Bin. Press **Shift+Delete** to permanently delete
+  them after a confirmation prompt.
 * **Drag to move** — drag one or more selected tiles onto a folder in the
   sidebar (the would-be target folder gets highlighted) to move the files
   there; their cached thumbnails move with them. Dragging onto a

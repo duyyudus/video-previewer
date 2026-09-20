@@ -34,11 +34,12 @@ from PySide6.QtWidgets import (
 from .. import config
 from ..cache.cache import ThumbnailCache
 from ..cache.database import open_database
+from ..file_deletion import move_to_trash
 from ..media.player import PreviewPlayer
 from ..models.sorting import SortKey, SortOrder
 from ..models.video_item import VideoItem, normalize_path
 from ..models.video_model import VideoModel
-from ..ui import exit_dialog, rename_dialog
+from ..ui import delete_dialog, exit_dialog, rename_dialog
 from ..ui.folder_sidebar import FolderSidebar
 from ..ui.video_grid import VideoGrid
 from ..workers.scanner import ScanResult, ScanSignals, Scanner
@@ -82,6 +83,9 @@ class MainWindow(QMainWindow):
         self._grid.open_folder_requested.connect(self._browse)
         # F2 on a selected tile renames the video file in place.
         self._grid.rename_requested.connect(self._rename_selected)
+        # Delete moves the selection to Trash; Shift+Delete permanently
+        # deletes it after an explicit confirmation.
+        self._grid.delete_requested.connect(self._delete_selected)
         # The sidebar tree is created here too: its double-click loads a
         # folder into the grid through the same funnel as the picker.
         self._sidebar = FolderSidebar(self)
@@ -107,6 +111,10 @@ class MainWindow(QMainWindow):
         # late batch would re-add the dead old path as a ghost tile. Scan
         # results are therefore remapped through this map.
         self._renamed: dict[str, str] = {}
+        # Successful deletions in the current folder session. A scanner or
+        # thumbnail job may already hold the old file in a worker result;
+        # these tombstones stop those late results resurrecting tiles/cache.
+        self._removed: set[str] = set()
         # Set at the start of closeEvent: while the window is closing, the
         # drain loop still runs the event queue, and mutations coming in
         # through queued events (clicks, late scan results) must be no-ops.
@@ -238,6 +246,7 @@ class MainWindow(QMainWindow):
         self._scan_gen += 1  # invalidate any in-flight scan of another folder
         gen = self._scan_gen
         self._renamed.clear()  # renames belong to the folder session
+        self._removed.clear()  # deletions belong to the folder session
         self._current_folder = folder
         self._folder_label.setText(str(folder))
         self._folder_label.setToolTip(str(folder))
@@ -498,7 +507,8 @@ class MainWindow(QMainWindow):
         to_add: list[VideoItem] = []
         to_update: list[VideoItem] = []
         for item in items:
-            if normalize_path(item.path) in self._renamed:
+            path_key = normalize_path(item.path)
+            if path_key in self._renamed or path_key in self._removed:
                 continue  # walked before a rename; the old path is dead
             row = self._model.row_for(item.path)
             if row is None:
@@ -549,6 +559,18 @@ class MainWindow(QMainWindow):
                     continue
                 fixed[Path(new_p).as_posix()] = (st.st_size, st.st_mtime)
             fresh = fixed
+        if self._removed:
+            # The worker saved its scan row before emitting ``finished`` and
+            # may have walked a file just before this window deleted it.
+            # Repair both its in-memory truth and the just-written scan row.
+            fresh = {
+                p: sm
+                for p, sm in fresh.items()
+                if normalize_path(Path(p)) not in self._removed
+            }
+            self._db.remove_scan_entries(
+                [Path(p).as_posix() for p in self._removed]
+            )
         removed = self._cache.purge_folder(result.folder, fresh)
         if removed:
             log.info("purged %d stale cache entries", removed)
@@ -587,6 +609,11 @@ class MainWindow(QMainWindow):
     def _on_thumb_ready(self, item: VideoItem) -> None:
         if self._closing:
             return  # no model mutation while the window drains for close
+        if normalize_path(item.path) in self._removed:
+            # The job may have written its DB row after deletion cleaned the
+            # cache. Retire that late row/JPEG instead of stranding it.
+            self._cache.remove_items([item])
+            return
         row = self._model.row_for(item.path)
         if row is None:
             return
@@ -599,6 +626,74 @@ class MainWindow(QMainWindow):
         log.warning("thumbnail failed for %s", path)
 
     # -- tile actions (selection-driven) --------------------------------------------------
+
+    def _delete_selected(self, permanent: bool) -> None:
+        """Delete the selected files and reconcile every local cache.
+
+        Plain Delete uses Qt's native Trash/Recycle Bin integration.
+        Shift+Delete unlinks only after an irreversible-action warning.
+        Individual failures are reported together; successful siblings are
+        still removed from the grid and caches.
+        """
+        if self._closing:
+            return
+        items = [
+            item
+            for index in self._grid.selectionModel().selectedRows()
+            if (item := self._model.item_at(index.row())) is not None
+        ]
+        if not items:
+            return
+        if permanent and not delete_dialog.confirm_permanent_delete(
+            self, [item.filename for item in items]
+        ):
+            return
+
+        # Windows cannot rename, trash, or unlink the file while the shared
+        # player still owns it. Release before touching any selected path.
+        self._player.leave()
+        self._grid.clear_hover()
+
+        deleted: list[VideoItem] = []
+        failed: list[str] = []
+        for item in items:
+            try:
+                if permanent:
+                    try:
+                        item.path.unlink()
+                    except FileNotFoundError:
+                        pass  # already gone: still reconcile its ghost tile
+                    success = True
+                else:
+                    success = move_to_trash(item.path)
+            except OSError as exc:
+                failed.append(f"{item.filename}: {exc.strerror or exc}")
+                continue
+            if success:
+                deleted.append(item)
+            else:
+                failed.append(f"{item.filename}: the system refused the operation")
+
+        if deleted:
+            paths = [item.path for item in deleted]
+            self._removed.update(normalize_path(path) for path in paths)
+            self._thumbs.cancel_pending(deleted)
+            self._cache.remove_items(deleted)
+            self._db.remove_scan_entries([path.as_posix() for path in paths])
+            self._model.remove_items(paths)
+            self._update_status()
+            log.info(
+                "%s %d video(s)",
+                "permanently deleted" if permanent else "moved to trash",
+                len(deleted),
+            )
+        if failed:
+            action = "permanently delete" if permanent else "move to Trash"
+            QMessageBox.warning(
+                self,
+                config.APP_NAME,
+                f"Could not {action}:\n" + "\n".join(failed),
+            )
 
     def _rename_selected(self) -> None:
         """F2: rename the one selected video file (stem only, ext fixed).

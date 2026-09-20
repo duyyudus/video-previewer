@@ -168,6 +168,14 @@ class ThumbnailCache:
             self._db.delete_videos([old.vid])
         return new_thumb
 
+    def remove_items(self, items: list[VideoItem]) -> int:
+        """Drop exact video rows and their cached thumbnail files."""
+        if not items:
+            return 0
+        for thumbnail in self._db.delete_videos([item.vid for item in items]):
+            _remove_thumb_file(thumbnail)
+        return len(items)
+
     def purge_folder(self, folder: Path, fresh: dict[str, tuple[int, float]]) -> int:
         """Drop cache entries for files that are gone or changed.
 
