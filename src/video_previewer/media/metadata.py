@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .. import config
+from .process_flags import WINDOWLESS_CREATION_FLAGS
 
 log = logging.getLogger(__name__)
 
@@ -37,7 +38,11 @@ def probe_video(path: Path, ffprobe: str | None = None) -> ProbeResult | None:
     ]
     try:
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=config.PROBE_TIMEOUT
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=config.PROBE_TIMEOUT,
+            creationflags=WINDOWLESS_CREATION_FLAGS,
         )
     except (OSError, subprocess.TimeoutExpired):
         log.warning("ffprobe failed for %s", path)

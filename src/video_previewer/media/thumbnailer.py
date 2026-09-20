@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 
 from .. import config
+from .process_flags import WINDOWLESS_CREATION_FLAGS
 
 log = logging.getLogger(__name__)
 
@@ -101,7 +102,11 @@ def _extract(ffmpeg: str, video: Path, out: Path, t: float, width: int) -> Extra
     ]
     try:
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=config.THUMB_EXTRACT_TIMEOUT
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=config.THUMB_EXTRACT_TIMEOUT,
+            creationflags=WINDOWLESS_CREATION_FLAGS,
         )
     except subprocess.TimeoutExpired:
         # A slow seek (huge/4K file, network-mounted folder) is not a broken
