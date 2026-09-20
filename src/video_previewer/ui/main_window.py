@@ -56,6 +56,7 @@ from ..models.video_item import VideoItem, normalize_path
 from ..models.video_model import VideoModel
 from ..ui import delete_dialog, exit_dialog, rename_dialog
 from ..ui.folder_sidebar import FolderSidebar
+from ..ui.settings_dialog import CacheClearJob, SettingsDialog
 from ..ui.video_grid import VideoGrid
 from ..workers.scanner import ScanResult, ScanSignals, Scanner
 from ..workers.thumbnail_worker import ThumbnailQueue
@@ -120,8 +121,15 @@ class MainWindow(QMainWindow):
         self._drop_handled_internally = False
 
         self._thumbs = ThumbnailQueue(self._db, self._cache, self)
+        self._settings_dialog: SettingsDialog | None = None
+        self._cache_clear_job: CacheClearJob | None = None
+        self._cache_clear_in_progress = False
+        self._cache_clear_timer = QTimer(self)
+        self._cache_clear_timer.setInterval(50)
+        self._cache_clear_timer.timeout.connect(self._start_cache_clear_when_idle)
         self._scan_signals = ScanSignals(self)
         self._scan_gen = 0
+        self._active_scans: set[int] = set()
         # Renames done since the current folder was opened:
         # normalized old path -> new path. A scan's fresh-file list is
         # captured while walking, but its purge runs when it finishes, so a
@@ -141,6 +149,7 @@ class MainWindow(QMainWindow):
         self._scan_signals.items.connect(self._on_scan_items)
         self._scan_signals.finished.connect(self._on_scan_finished)
         self._scan_signals.error.connect(self._on_scan_error)
+        self._scan_signals.settled.connect(self._on_scan_settled)
         self._thumbs.signals.ready.connect(self._on_thumb_ready)
         self._thumbs.signals.failed.connect(self._on_thumb_failed)
 
@@ -153,6 +162,9 @@ class MainWindow(QMainWindow):
 
         bar = QHBoxLayout()
         bar.setSpacing(8)
+        self._settings_btn = QPushButton("Settings", self)
+        self._settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._settings_btn.clicked.connect(self._show_settings)
         self._browse_btn = QPushButton("Open Folder\u2026", self)
         self._browse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._browse_btn.clicked.connect(self._browse)
@@ -191,6 +203,7 @@ class MainWindow(QMainWindow):
         self._sort_btn.setMenu(self._build_sort_menu())
         self._status_label = QLabel("", self)
         self._status_label.setStyleSheet("color: #9a9aa5;")
+        bar.addWidget(self._settings_btn)
         bar.addWidget(self._browse_btn)
         bar.addWidget(self._sidebar_btn)
         bar.addWidget(self._folder_label, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -286,6 +299,83 @@ class MainWindow(QMainWindow):
         if folder:
             self._open_folder(Path(folder))
 
+    # -- settings -------------------------------------------------------------------
+
+    def _show_settings(self) -> None:
+        if self._closing:
+            return
+        if self._settings_dialog is not None:
+            self._settings_dialog.show()
+            self._settings_dialog.raise_()
+            self._settings_dialog.activateWindow()
+            return
+        dialog = SettingsDialog(config.app_cache_dir(), self)
+        dialog.clear_cache_requested.connect(self._clear_cache)
+        dialog.destroyed.connect(self._on_settings_dialog_destroyed)
+        self._settings_dialog = dialog
+        if self._cache_clear_in_progress:
+            dialog.set_cache_busy(True)
+        dialog.show()
+
+    def _on_settings_dialog_destroyed(self) -> None:
+        self._settings_dialog = None
+
+    def _clear_cache(self) -> None:
+        """Coordinate workers before deleting all derived cache data."""
+        if self._closing or self._cache_clear_in_progress:
+            return
+        self._cache_clear_in_progress = True
+        if self._settings_dialog is not None:
+            self._settings_dialog.set_cache_busy(True)
+        self._player.leave()
+        self._grid.clear_hover()
+        self._thumbs.pause()
+        self._start_cache_clear_when_idle()
+
+    def _start_cache_clear_when_idle(self) -> None:
+        if not self._cache_clear_in_progress or self._cache_clear_job is not None:
+            self._cache_clear_timer.stop()
+            return
+        if self._thumbs.pending_count() > 0 or self._active_scans:
+            self._cache_clear_timer.start()
+            return
+        self._cache_clear_timer.stop()
+        job = CacheClearJob(self._cache)
+        self._cache_clear_job = job
+        job.signals.finished.connect(self._on_cache_cleared)
+        job.signals.failed.connect(self._on_cache_clear_failed)
+        QThreadPool.globalInstance().start(job)
+
+    def _finish_cache_clear(self) -> None:
+        self._cache_clear_job = None
+        self._cache_clear_in_progress = False
+        self._thumbs.resume()
+
+    def _on_cache_cleared(self, removed: int) -> None:
+        self._finish_cache_clear()
+        if self._closing:
+            return
+        cleared = [
+            item.without_cached_data()
+            for row in range(self._model.count())
+            if (item := self._model.item_at(row)) is not None
+        ]
+        self._model.update_items(cleared)
+        self._grid.delegate().clear_pixmap_cache()
+        self._grid.viewport().update()
+        if self._settings_dialog is not None:
+            self._settings_dialog.set_cache_busy(False)
+            self._settings_dialog.refresh_cache_size()
+        log.info("cleared application cache (%d thumbnail file(s))", removed)
+
+    def _on_cache_clear_failed(self, message: str) -> None:
+        self._finish_cache_clear()
+        if self._closing:
+            return
+        if self._settings_dialog is not None:
+            self._settings_dialog.show_cache_error()
+        log.warning("could not clear application cache: %s", message)
+
     def _open_folder(self, folder: Path) -> None:
         if self._closing:
             return
@@ -315,6 +405,7 @@ class MainWindow(QMainWindow):
             self._scan_signals, gen,
             is_stale=self._scan_stale(gen),
         )
+        self._active_scans.add(gen)
         QThreadPool.globalInstance().start(scanner)
         log.info("scanning %s (recursive=%s)", folder, self._recursive_chk.isChecked())
 
@@ -708,6 +799,12 @@ class MainWindow(QMainWindow):
         self._model.set_layout_deferred(False)  # never leave the order pending
         self._status_label.setText(f"Scan failed: {message}")
 
+    def _on_scan_settled(self, gen: int) -> None:
+        """Retire scanner bookkeeping regardless of how the worker ended."""
+        self._active_scans.discard(gen)
+        if self._cache_clear_in_progress:
+            self._start_cache_clear_when_idle()
+
     def _update_status(self) -> None:
         n = self._model.count()
         if self._search_pattern:
@@ -921,7 +1018,9 @@ class MainWindow(QMainWindow):
         # is safe here because _closing turns every queued mutation into a
         # no-op; the sleep only caps the spin between event pumps.
         deadline = time.time() + 5.0
-        while self._thumbs.pending_count() > 0 and time.time() < deadline:
+        while (
+            self._thumbs.pending_count() > 0 or self._cache_clear_in_progress
+        ) and time.time() < deadline:
             QCoreApplication.processEvents()
             time.sleep(0.02)
         # Resolve both independent persistence choices after the drain: no

@@ -142,6 +142,7 @@ class ThumbnailQueue(QObject):
         # while recomputing each pending item's sha1 — O(n²) on the GUI thread.
         self._pending: dict[str, VideoItem] = {}
         self._inflight: set[str] = set()
+        self._paused = False
         self.signals = self._signals
         # job_done is emitted from worker threads; the connection is queued
         # automatically because the receiver lives on the GUI thread.
@@ -150,7 +151,7 @@ class ThumbnailQueue(QObject):
     # -- public API (main thread) --------------------------------------------
 
     def request(self, item: VideoItem) -> None:
-        if item.thumb_ready:
+        if item.thumb_ready or self._paused:
             return
         if not self._cache.usable:
             # Unwritable cache dir: every job would probe the file and then
@@ -170,6 +171,16 @@ class ThumbnailQueue(QObject):
         slot — but work for the abandoned folder never starts.
         """
         self._pending.clear()
+
+    def pause(self) -> None:
+        """Stop accepting work and discard jobs that have not started."""
+        self._paused = True
+        self.clear_pending()
+
+    def resume(self) -> None:
+        """Allow thumbnail requests after a coordinated cache operation."""
+        self._paused = False
+        self._pump()
 
     def cancel_pending(self, items: list[VideoItem]) -> None:
         """Drop queued work for files removed from the current folder.
@@ -192,6 +203,8 @@ class ThumbnailQueue(QObject):
         self._pump()
 
     def _pump(self) -> None:
+        if self._paused:
+            return
         while self._pending and len(self._inflight) < config.THUMB_CONCURRENCY:
             # FIFO: dicts keep insertion order; plain dict.popitem() has no
             # ``last`` kwarg, so take the first key explicitly.

@@ -196,6 +196,27 @@ class Database:
             self._conn.commit()
         return thumbs
 
+    def clear_cache(self) -> None:
+        """Delete every derived video and scan row.
+
+        The database file itself stays open because it is shared by the
+        application's workers.  Truncating the WAL after the deletes keeps
+        the cache-size display representative without replacing an in-use
+        SQLite file.
+        """
+        self._guard()
+        with self._lock:
+            self._conn.execute("DELETE FROM videos")
+            self._conn.execute("DELETE FROM scans")
+            self._conn.commit()
+            try:
+                self._conn.execute("VACUUM")
+                self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except sqlite3.Error:
+                # The rows are already gone; failure to compact a disposable
+                # database must not turn a successful clear into an error.
+                pass
+
     def videos_under(self, folder_prefix: str) -> list[VideoRow]:
         """All rows whose stored path is under *folder_prefix* (inclusive).
 

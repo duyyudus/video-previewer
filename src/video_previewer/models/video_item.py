@@ -80,6 +80,18 @@ class VideoItem:
     def with_thumbnail(self, path: Path) -> "VideoItem":
         return self._carry(replace(self, thumbnail_path=path, thumb_ready=True))
 
+    def without_cached_data(self) -> "VideoItem":
+        """Return the scanned file identity without derived cache fields."""
+        return self._carry(replace(
+            self,
+            duration_ms=None,
+            width=None,
+            height=None,
+            vcodec=None,
+            thumbnail_path=None,
+            thumb_ready=False,
+        ))
+
     def _carry(self, new: "VideoItem") -> "VideoItem":
         """Copy the memoized identity into *new*.
 

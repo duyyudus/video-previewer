@@ -47,6 +47,7 @@ class ScanSignals(QObject):
     items = Signal(list, int)      # list[VideoItem], generation
     finished = Signal(object, int)  # ScanResult, generation
     error = Signal(str)
+    settled = Signal(int)          # generation - success, cancellation, or error
 
 
 class Scanner(QRunnable):
@@ -116,6 +117,8 @@ class Scanner(QRunnable):
         except Exception as exc:  # noqa: BLE001 - report anything to the UI
             log.exception("scan failed for %s", self._folder)
             self._signals.error.emit(str(exc))
+        finally:
+            self._signals.settled.emit(self._gen)
 
     # -- internals -----------------------------------------------------------
 

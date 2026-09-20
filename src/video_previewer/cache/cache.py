@@ -176,6 +176,29 @@ class ThumbnailCache:
             _remove_thumb_file(thumbnail)
         return len(items)
 
+    def clear_all(self) -> int:
+        """Clear all generated thumbnails, metadata, and cached scans.
+
+        Only files directly inside the managed thumbnail directory are
+        removed.  This deliberately avoids following directories or stored
+        paths from the database when performing a global cleanup.
+        """
+        self._db.clear_cache()
+        removed = 0
+        try:
+            entries = list(self._dir.iterdir())
+        except OSError as exc:
+            log.warning("could not list thumbnail cache %s (%s)", self._dir, exc)
+            return 0
+        for entry in entries:
+            try:
+                if entry.is_file() or entry.is_symlink():
+                    entry.unlink()
+                    removed += 1
+            except OSError:
+                log.warning("could not remove cached thumbnail %s", entry)
+        return removed
+
     def purge_folder(self, folder: Path, fresh: dict[str, tuple[int, float]]) -> int:
         """Drop cache entries for files that are gone or changed.
 
