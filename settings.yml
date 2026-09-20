@@ -38,8 +38,9 @@ thumb_fallback_seconds: 1.0
 thumb_extract_timeout: 60
 # Timeout per ffprobe metadata probe, in seconds.
 probe_timeout: 10
-# Maximum number of parallel thumbnail jobs.
-thumb_concurrency: 4
+# Maximum number of parallel thumbnail jobs. null uses every logical CPU
+# reported by the operating system; set a positive integer to override it.
+thumb_concurrency: null
 
 # --- Folder scanning ------------------------------------------------------------
 # Items emitted per scanner batch.

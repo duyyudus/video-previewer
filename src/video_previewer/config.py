@@ -6,7 +6,8 @@ missing file, or a missing/invalid entry, falls back to the built-in
 defaults below, so a bad edit can never break the app. Numeric entries are
 additionally clamped to their valid range: an out-of-range value (e.g.
 ``thumb_concurrency: 0``, which would starve the thumbnail queue) is logged
-and pinned to the nearest bound instead of being used as-is.
+and pinned to the nearest bound instead of being used as-is. A null
+``thumb_concurrency`` automatically uses the machine's logical CPU count.
 """
 
 from __future__ import annotations
@@ -52,7 +53,8 @@ DEFAULTS: dict[str, Any] = {
     "thumb_fallback_seconds": 1.0,
     "thumb_extract_timeout": 60,
     "probe_timeout": 10,
-    "thumb_concurrency": 4,
+    # None uses all logical CPUs reported by the operating system.
+    "thumb_concurrency": None,
     # Scanner: items emitted per batch.
     "scan_batch": 64,
     # Grid layout: preferred tile width (px); tile aspect (w/h); filename
@@ -215,6 +217,37 @@ def _extensions() -> frozenset[str]:
     return frozenset(result) if result else default
 
 
+def _thumb_concurrency() -> int:
+    """Configured parallel thumbnail jobs, or the logical CPU count for null."""
+    automatic = max(1, os.cpu_count() or 1)
+    value = _settings_data.get("thumb_concurrency", DEFAULTS["thumb_concurrency"])
+    if value is None:
+        return automatic
+    if isinstance(value, bool):
+        log.warning(
+            "settings: thumb_concurrency must be a positive integer or null, "
+            "using logical CPU count %s",
+            automatic,
+        )
+        return automatic
+    try:
+        result = int(value)
+    except (TypeError, ValueError):
+        log.warning(
+            "settings: thumb_concurrency is not a valid number, "
+            "using logical CPU count %s",
+            automatic,
+        )
+        return automatic
+    if result < 1:
+        log.warning(
+            "settings: thumb_concurrency=%s is below the minimum 1, clamped",
+            result,
+        )
+        return 1
+    return result
+
+
 def _cache_dir() -> Path | None:
     """Configured cache path, or None for the platform default.
 
@@ -260,7 +293,7 @@ def load_settings() -> None:
     THUMB_FALLBACK_SECONDS = _num("thumb_fallback_seconds", float, minimum=0.0)
     THUMB_EXTRACT_TIMEOUT = _num("thumb_extract_timeout", int, minimum=1)
     PROBE_TIMEOUT = _num("probe_timeout", int, minimum=1)
-    THUMB_CONCURRENCY = _num("thumb_concurrency", int, minimum=1)
+    THUMB_CONCURRENCY = _thumb_concurrency()
     SCAN_BATCH = _num("scan_batch", int, minimum=1)
     CELL_WIDTH = _num("cell_width", int, minimum=1)
     CELL_ASPECT = _num("cell_aspect", float, minimum=0.01)

@@ -769,7 +769,9 @@ class MainWindow(QMainWindow):
             self._db.remove_scan_entries(
                 [Path(p).as_posix() for p in self._removed]
             )
-        removed = self._cache.purge_folder(result.folder, fresh)
+        removed = self._cache.purge_folder(
+            result.folder, fresh, recursive=result.recursive
+        )
         if removed:
             log.info("purged %d stale cache entries", removed)
         # Converge the grid with the disk: rows the walk did not find —

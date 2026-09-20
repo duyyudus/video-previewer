@@ -199,20 +199,31 @@ class ThumbnailCache:
                 log.warning("could not remove cached thumbnail %s", entry)
         return removed
 
-    def purge_folder(self, folder: Path, fresh: dict[str, tuple[int, float]]) -> int:
-        """Drop cache entries for files that are gone or changed.
+    def purge_folder(
+        self,
+        folder: Path,
+        fresh: dict[str, tuple[int, float]],
+        *,
+        recursive: bool,
+    ) -> int:
+        """Drop in-scope cache entries for files that are gone or changed.
 
         *fresh* maps ``str(path) -> (size, mtime)`` for every video seen in
-        the latest scan of *folder*. Returns the number of rows removed.
+        the latest scan of *folder*. A flat scan owns only direct children;
+        it must not delete reusable thumbnails belonging to subfolders that
+        were outside that scan. Returns the number of rows removed.
         """
         from ..models.video_item import video_id
 
         rows = self._db.videos_under(folder.absolute().as_posix())
         if not rows:
             return 0
+        folder_key = normalize_path(folder.absolute())
         fresh_n = {normalize_path(Path(p)): (s, m) for p, (s, m) in fresh.items()}
         stale: list[str] = []
         for row in rows:
+            if not recursive and normalize_path(Path(row.path).parent) != folder_key:
+                continue
             np_ = normalize_path(Path(row.path))
             if np_ not in fresh_n:
                 # file deleted (or no longer matched)

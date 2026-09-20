@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -58,7 +59,7 @@ def test_settings_file_overrides_values(tmp_path, monkeypatch):
     assert config.SUPPORTED_EXTENSIONS == frozenset({".mp4", ".ts"})
     # Untouched keys keep their built-in defaults.
     assert config.SEEK_THROTTLE_MS == 33
-    assert config.THUMB_CONCURRENCY == 4
+    assert config.THUMB_CONCURRENCY == max(1, os.cpu_count() or 1)
 
 
 def test_settings_file_configures_relative_cache_dir(tmp_path, monkeypatch):
@@ -91,7 +92,7 @@ def test_invalid_values_fall_back_to_defaults(tmp_path, monkeypatch, caplog):
         "supported_extensions: mp4\n",
     )
     assert config.THUMB_WIDTH == 320
-    assert config.THUMB_CONCURRENCY == 4
+    assert config.THUMB_CONCURRENCY == max(1, os.cpu_count() or 1)
     assert config.CACHE_DIR is None
     assert ".mp4" in config.SUPPORTED_EXTENSIONS
     assert any("settings" in r.message for r in caplog.records)
@@ -101,6 +102,24 @@ def test_unparseable_yaml_falls_back_to_defaults(tmp_path, monkeypatch):
     _load(tmp_path, monkeypatch, "thumb_width: [unclosed\n")
     assert config.THUMB_WIDTH == 320
     assert config.SEEK_THROTTLE_MS == 33
+
+
+def test_null_thumbnail_concurrency_uses_logical_cpu_count(tmp_path, monkeypatch):
+    monkeypatch.setattr(config.os, "cpu_count", lambda: 16)
+    _load(tmp_path, monkeypatch, "thumb_concurrency: null\n")
+    assert config.THUMB_CONCURRENCY == 16
+
+
+def test_null_thumbnail_concurrency_survives_unknown_cpu_count(tmp_path, monkeypatch):
+    monkeypatch.setattr(config.os, "cpu_count", lambda: None)
+    _load(tmp_path, monkeypatch, "thumb_concurrency: null\n")
+    assert config.THUMB_CONCURRENCY == 1
+
+
+def test_explicit_thumbnail_concurrency_overrides_cpu_count(tmp_path, monkeypatch):
+    monkeypatch.setattr(config.os, "cpu_count", lambda: 16)
+    _load(tmp_path, monkeypatch, "thumb_concurrency: 6\n")
+    assert config.THUMB_CONCURRENCY == 6
 
 
 def test_out_of_range_values_are_clamped(tmp_path, monkeypatch, caplog):

@@ -62,7 +62,7 @@ def test_purge_removes_deleted_and_changed(db, cache_dir, tmp_path):
         items["kept"].path.as_posix(): (10, 1.0),
         items["changed"].path.as_posix(): (10, 999.0),  # mtime changed -> stale
     }
-    removed = cache.purge_folder(folder, fresh)
+    removed = cache.purge_folder(folder, fresh, recursive=False)
     assert removed == 2  # changed + deleted
 
     assert db.get_video(items["kept"].vid) is not None
@@ -72,6 +72,50 @@ def test_purge_removes_deleted_and_changed(db, cache_dir, tmp_path):
     assert cache.thumbnail_path_for(items["changed"].vid).exists() is False
     assert cache.thumbnail_path_for(items["deleted"].vid).exists() is False
     assert cache.thumbnail_path_for(items["kept"].vid).exists() is True
+
+
+def test_flat_purge_keeps_cached_thumbnails_in_subfolders(
+    db, cache_dir, tmp_path
+):
+    cache = ThumbnailCache(db)
+    folder = tmp_path / "vids"
+    child = folder / "child"
+    child.mkdir(parents=True)
+    direct = VideoItem(folder / "gone.mp4", 10, 1.0)
+    nested = VideoItem(child / "cached.mp4", 10, 1.0)
+    for item in (direct, nested):
+        thumb = cache.thumbnail_path_for(item.vid)
+        thumb.parent.mkdir(parents=True, exist_ok=True)
+        thumb.write_bytes(b"jpeg")
+        cache.store(item, thumb, 1000, 320, 180, "h264")
+
+    removed = cache.purge_folder(folder, {}, recursive=False)
+
+    assert removed == 1
+    assert db.get_video(direct.vid) is None
+    assert not cache.thumbnail_path_for(direct.vid).exists()
+    assert db.get_video(nested.vid) is not None
+    assert cache.thumbnail_path_for(nested.vid).exists()
+
+
+def test_recursive_purge_removes_cached_thumbnails_in_subfolders(
+    db, cache_dir, tmp_path
+):
+    cache = ThumbnailCache(db)
+    folder = tmp_path / "vids"
+    child = folder / "child"
+    child.mkdir(parents=True)
+    nested = VideoItem(child / "gone.mp4", 10, 1.0)
+    thumb = cache.thumbnail_path_for(nested.vid)
+    thumb.parent.mkdir(parents=True, exist_ok=True)
+    thumb.write_bytes(b"jpeg")
+    cache.store(nested, thumb, 1000, 320, 180, "h264")
+
+    removed = cache.purge_folder(folder, {}, recursive=True)
+
+    assert removed == 1
+    assert db.get_video(nested.vid) is None
+    assert not thumb.exists()
 
 
 def test_delete_scans_for_folder(db, tmp_path):
