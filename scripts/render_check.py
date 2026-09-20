@@ -23,8 +23,10 @@ from video_previewer.ui.main_window import MainWindow  # noqa: E402
 from video_previewer import config  # noqa: E402
 from video_previewer.ui import exit_dialog  # noqa: E402
 
-# Headless run: never block on the keep/discard prompt in closeEvent.
-exit_dialog.ask_keep_on_exit = lambda parent, folder, video_count: False
+# Headless run: never block on the exit-options prompt in closeEvent.
+exit_dialog.ask_exit_choices = lambda parent, folder, video_count: (
+    exit_dialog.ExitChoices(remember_folder=False, keep_cache=False)
+)
 
 
 def make_video(path: Path, seconds: int, hue: int) -> None:

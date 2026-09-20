@@ -1,12 +1,8 @@
-"""Exit prompt: keep or discard the selected folder and its videos.
-
-Shown when the window closes with a folder open. The "remember" checkbox is
-off by default: unless the user opts in, the folder and its cached videos
-(thumbnails, metadata, scan results) are discarded.
-"""
+"""Independent exit choices for folder restoration and cached video data."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -24,32 +20,48 @@ if TYPE_CHECKING:
     from PySide6.QtWidgets import QWidget
 
 
+@dataclass(frozen=True, slots=True)
+class ExitChoices:
+    """Preferences selected when closing with a folder open."""
+
+    remember_folder: bool
+    keep_cache: bool
+
+
 def build_dialog(
     parent: QWidget | None, folder: Path, video_count: int
-) -> tuple[QDialog, QCheckBox]:
-    """Build (but do not run) the keep/discard dialog.
+) -> tuple[QDialog, QCheckBox, QCheckBox]:
+    """Build (but do not run) the exit-options dialog.
 
-    Returns the dialog and its "remember" checkbox so tests can inspect the
-    default state without blocking on a modal loop.
+    Folder restoration is off by default, while the expensive thumbnail
+    cache is retained. They are separate controls so a user can start with
+    an empty window without paying to regenerate thumbnails later.
     """
     word = "video" if video_count == 1 else "videos"
     dlg = QDialog(parent)
     dlg.setWindowTitle(config.APP_NAME)
     layout = QVBoxLayout(dlg)
     layout.addWidget(
-        QLabel(f"Keep {folder} and its {video_count} {word} for next time?")
+        QLabel(f"Closing {folder} ({video_count} {word}). What should be kept?")
     )
-    remember = QCheckBox("Remember this folder and its videos", dlg)
-    # Off by default: the folder is not remembered unless the user checks it.
-    layout.addWidget(remember)
+    remember_folder = QCheckBox("Reopen this folder next time", dlg)
+    layout.addWidget(remember_folder)
+    keep_cache = QCheckBox("Keep cached thumbnails and metadata", dlg)
+    keep_cache.setChecked(True)
+    layout.addWidget(keep_cache)
     buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok, dlg)
     buttons.accepted.connect(dlg.accept)
     layout.addWidget(buttons)
-    return dlg, remember
+    return dlg, remember_folder, keep_cache
 
 
-def ask_keep_on_exit(parent: QWidget | None, folder: Path, video_count: int) -> bool:
-    """Run the dialog; True if the user wants to keep the folder + videos."""
-    dlg, remember = build_dialog(parent, folder, video_count)
+def ask_exit_choices(
+    parent: QWidget | None, folder: Path, video_count: int
+) -> ExitChoices:
+    """Run the dialog and return both independent persistence choices."""
+    dlg, remember_folder, keep_cache = build_dialog(parent, folder, video_count)
     dlg.exec()
-    return remember.isChecked()
+    return ExitChoices(
+        remember_folder=remember_folder.isChecked(),
+        keep_cache=keep_cache.isChecked(),
+    )

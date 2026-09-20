@@ -9,6 +9,13 @@
 #
 # Restart the app after editing.
 
+# --- Cache ------------------------------------------------------------------
+# Directory for thumbnails, metadata, scan results, and diagnostic logs.
+# Leave null to use the platform default. Relative paths are resolved from
+# this settings.yml file; forward slashes also work on Windows.
+# Example: cache_dir: D:/video-previewer-cache
+cache_dir: null
+
 # --- Supported files --------------------------------------------------------
 # Video file extensions (lowercase, dot included; "MP4" is normalised to ".mp4").
 supported_extensions:

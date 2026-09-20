@@ -83,17 +83,20 @@ def file_settings(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _no_exit_prompt(monkeypatch):
-    """closeEvent must never block on the keep/discard dialog in tests.
+    """closeEvent must never block on the exit-options dialog in tests.
 
-    Answers with the UI default (unchecked = discard). Tests that exercise
-    the "keep" outcome re-stub ``exit_dialog.ask_keep_on_exit`` themselves.
+    Uses the UI defaults: do not restore the temporary folder, but retain its
+    cache. Tests exercising other combinations re-stub the choice themselves.
     """
     from video_previewer.ui import exit_dialog
 
     monkeypatch.setattr(
         exit_dialog,
-        "ask_keep_on_exit",
-        lambda parent, folder, video_count: False,
+        "ask_exit_choices",
+        lambda parent, folder, video_count: exit_dialog.ExitChoices(
+            remember_folder=False,
+            keep_cache=True,
+        ),
     )
 
 

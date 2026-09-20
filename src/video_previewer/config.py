@@ -38,6 +38,9 @@ SETTING_SORT_ORDER = "sort_order"
 
 #: Built-in defaults; entries in settings.yml override these, one by one.
 DEFAULTS: dict[str, Any] = {
+    # Persistent thumbnails, metadata, scan results, and diagnostic logs.
+    # None selects the platform-specific per-user cache directory.
+    "cache_dir": None,
     # Supported video file extensions (lowercase, dot included).
     "supported_extensions": [".mp4", ".mkv", ".mov", ".webm", ".avi", ".m4v"],
     # Thumbnails: width (px); extraction position as a fraction of the
@@ -111,6 +114,7 @@ DEFAULT_WINDOW_HEIGHT: int
 SEARCH_BOX_WIDTH: int
 SEARCH_DEBOUNCE_MS: int
 SIDEBAR_WIDTH: int
+CACHE_DIR: Path | None
 
 
 def settings_path() -> Path:
@@ -211,6 +215,24 @@ def _extensions() -> frozenset[str]:
     return frozenset(result) if result else default
 
 
+def _cache_dir() -> Path | None:
+    """Configured cache path, or None for the platform default.
+
+    Relative paths are anchored beside the active settings file so their
+    meaning does not depend on the process working directory.
+    """
+    value = _settings_data.get("cache_dir", DEFAULTS["cache_dir"])
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if not isinstance(value, str):
+        log.warning("settings: cache_dir must be a path string, using default")
+        return None
+    path = Path(os.path.expandvars(value)).expanduser()
+    if not path.is_absolute():
+        path = settings_path().parent / path
+    return path.resolve(strict=False)
+
+
 def load_settings() -> None:
     """(Re)read settings.yml and (re)bind every tunable constant.
 
@@ -224,12 +246,13 @@ def load_settings() -> None:
     global AUTOPLAY_DELAY_MS, SEEK_THROTTLE_MS, DOUBLE_CLICK_MAX_DIST
     global DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT, SEARCH_BOX_WIDTH
     global SEARCH_DEBOUNCE_MS
-    global SIDEBAR_WIDTH
+    global SIDEBAR_WIDTH, CACHE_DIR
 
     _settings_data.clear()
     _settings_data.update(_read_settings_file())
 
     SUPPORTED_EXTENSIONS = _extensions()
+    CACHE_DIR = _cache_dir()
     THUMB_WIDTH = _num("thumb_width", int, minimum=1)
     THUMB_POSITION_RATIO = _num(
         "thumb_position_ratio", float, minimum=0.0, maximum=1.0
@@ -284,11 +307,14 @@ def ffprobe_path() -> str | None:
 def app_cache_dir() -> Path:
     """Per-user cache directory for thumbnails + metadata.
 
-    Override with VIDEO_PREVIEWER_CACHE_DIR (used by tests).
+    ``cache_dir`` in settings.yml selects a custom location. The environment
+    override remains higher priority for isolated tests and compatibility.
     """
     override = os.environ.get("VIDEO_PREVIEWER_CACHE_DIR")
     if override:
-        return Path(override)
+        return Path(os.path.expandvars(override)).expanduser()
+    if CACHE_DIR is not None:
+        return CACHE_DIR
     if sys.platform == "win32":
         base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
         return Path(base) / ORG_NAME

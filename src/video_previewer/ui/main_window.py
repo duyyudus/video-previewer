@@ -905,8 +905,10 @@ class MainWindow(QMainWindow):
         self._settings.sync()
         folder = self._current_folder
         # Ask before draining so the user is not kept waiting for workers.
-        keep = folder is None or exit_dialog.ask_keep_on_exit(
-            self, folder, self._model.count()
+        choices = (
+            exit_dialog.ask_exit_choices(self, folder, self._model.count())
+            if folder is not None
+            else None
         )
         self._player.leave()
         # The window is still on screen while we pump events: make the grid
@@ -922,10 +924,10 @@ class MainWindow(QMainWindow):
         while self._thumbs.pending_count() > 0 and time.time() < deadline:
             QCoreApplication.processEvents()
             time.sleep(0.02)
-        # Resolve the keep/discard decision after the drain: no workers are
-        # still writing cache rows when we purge.
-        if folder is not None:
-            if keep:
+        # Resolve both independent persistence choices after the drain: no
+        # workers are still writing cache rows if the user discards them.
+        if folder is not None and choices is not None:
+            if choices.remember_folder:
                 # Re-assert + sync so the choice is on disk, not just in this
                 # QSettings instance's buffer.
                 self._settings.setValue(config.SETTING_LAST_FOLDER, str(folder))
@@ -934,15 +936,20 @@ class MainWindow(QMainWindow):
                 )
                 self._settings.sync()
             else:
-                self._forget_folder(folder)
+                self._forget_folder_setting()
+            if not choices.keep_cache:
+                self._discard_folder_cache(folder)
         self._db.close()
         super().closeEvent(event)
 
-    def _forget_folder(self, folder: Path) -> None:
-        """Discard the selected folder: forget the setting + drop its cache."""
+    def _forget_folder_setting(self) -> None:
+        """Stop restoring the selected folder without touching its cache."""
         self._settings.remove(config.SETTING_LAST_FOLDER)
         self._settings.remove(config.SETTING_RECURSIVE)
         self._settings.sync()
+
+    def _discard_folder_cache(self, folder: Path) -> None:
+        """Drop cached thumbnails, metadata, and scans for *folder*."""
         removed = self._cache.purge_folder_all(folder)
         if removed:
             log.info("discarded %d cached video(s) for %s", removed, folder)

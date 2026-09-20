@@ -61,16 +61,38 @@ def test_settings_file_overrides_values(tmp_path, monkeypatch):
     assert config.THUMB_CONCURRENCY == 4
 
 
+def test_settings_file_configures_relative_cache_dir(tmp_path, monkeypatch):
+    _load(tmp_path, monkeypatch, "cache_dir: local-cache\n")
+    assert config.app_cache_dir() == (tmp_path / "local-cache").resolve()
+    assert config.thumbnail_dir() == (
+        tmp_path / "local-cache" / "thumbnails"
+    ).resolve()
+    assert config.database_path() == (
+        tmp_path / "local-cache" / "metadata.sqlite"
+    ).resolve()
+
+
+def test_cache_dir_environment_override_remains_highest_priority(
+    tmp_path, monkeypatch
+):
+    _load(tmp_path, monkeypatch, "cache_dir: yaml-cache\n")
+    override = tmp_path / "isolated-cache"
+    monkeypatch.setenv("VIDEO_PREVIEWER_CACHE_DIR", str(override))
+    assert config.app_cache_dir() == override
+
+
 def test_invalid_values_fall_back_to_defaults(tmp_path, monkeypatch, caplog):
     _load(
         tmp_path,
         monkeypatch,
         "thumb_width: not-a-number\n"
         "thumb_concurrency: true\n"
+        "cache_dir: [not, a, path]\n"
         "supported_extensions: mp4\n",
     )
     assert config.THUMB_WIDTH == 320
     assert config.THUMB_CONCURRENCY == 4
+    assert config.CACHE_DIR is None
     assert ".mp4" in config.SUPPORTED_EXTENSIONS
     assert any("settings" in r.message for r in caplog.records)
 
@@ -117,6 +139,7 @@ def test_shipped_settings_yaml_is_sane():
     config.load_settings()
     assert config.settings_path().name == "settings.yml"
     assert config.settings_path().is_file()
+    assert config.CACHE_DIR is None
     assert config.THUMB_WIDTH > 0
     assert 0.0 < config.THUMB_POSITION_RATIO <= 1.0
     assert config.MIN_COLS <= config.MAX_COLS

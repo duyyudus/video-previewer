@@ -1,8 +1,7 @@
-"""Exit prompt: keep/discard the selected folder and its videos on close.
+"""Independent folder-restoration and cache choices on close.
 
-The conftest ``_no_exit_prompt`` stub answers the dialog with the UI default
-(unchecked = discard) so no test blocks on a modal; the keep test re-stubs
-``ask_keep_on_exit`` itself.
+The conftest ``_no_exit_prompt`` stub uses the UI defaults so no test blocks
+on a modal; tests exercising other combinations re-stub the choice.
 """
 
 from __future__ import annotations
@@ -46,10 +45,13 @@ def _thumbs_ready(win) -> bool:
     return all(win.model.item_at(i).thumb_ready for i in range(win.model.count()))
 
 
-def test_exit_dialog_defaults_to_discard(qapp, video_folder):
-    dlg, remember = exit_dialog.build_dialog(None, video_folder, 2)
+def test_exit_dialog_defaults_to_forget_folder_but_keep_cache(qapp, video_folder):
+    dlg, remember_folder, keep_cache = exit_dialog.build_dialog(
+        None, video_folder, 2
+    )
     try:
-        assert remember.isChecked() is False  # off by default: don't remember
+        assert remember_folder.isChecked() is False
+        assert keep_cache.isChecked() is True
         text = " ".join(lbl.text() for lbl in dlg.findChildren(QLabel))
         assert str(video_folder) in text
         assert "2 videos" in text
@@ -57,7 +59,7 @@ def test_exit_dialog_defaults_to_discard(qapp, video_folder):
         dlg.deleteLater()
 
 
-def test_close_discards_folder_and_videos_by_default(
+def test_close_forgets_folder_but_keeps_cached_videos_by_default(
     qapp, cache_dir, video_folder, db, file_settings
 ):
     win = MainWindow()
@@ -66,7 +68,7 @@ def test_close_discards_folder_and_videos_by_default(
         win._open_folder(video_folder)
         assert pump(qapp, lambda: _thumbs_ready(win), timeout=60), \
             "grid/thumbnails unfinished"
-        win.close()  # conftest stub answers with the default (discard)
+        win.close()
     finally:
         win.deleteLater()
 
@@ -74,10 +76,13 @@ def test_close_discards_folder_and_videos_by_default(
     s = _read_settings(file_settings)
     assert s.value(config.SETTING_LAST_FOLDER) is None
     assert s.value(config.SETTING_RECURSIVE) is None
-    # ...and none of its cached videos survive.
+    # ...but its reusable cache survives independently.
     prefix = video_folder.absolute().as_posix()
-    assert db.videos_under(prefix) == []
-    assert db.load_scan(db.scan_key(video_folder, False)) is None
+    rows = db.videos_under(prefix)
+    assert len(rows) == 2
+    for row in rows:
+        assert Path(row.thumbnail).exists()
+    assert db.load_scan(db.scan_key(video_folder, False)) is not None
     assert db.load_scan(db.scan_key(video_folder, True)) is None
 
 
@@ -85,7 +90,9 @@ def test_close_keeps_folder_when_checked(
     qapp, cache_dir, video_folder, db, file_settings, monkeypatch
 ):
     monkeypatch.setattr(
-        exit_dialog, "ask_keep_on_exit", lambda parent, folder, n: True
+        exit_dialog,
+        "ask_exit_choices",
+        lambda parent, folder, n: exit_dialog.ExitChoices(True, True),
     )
     win = MainWindow()
     win.show()
@@ -104,3 +111,28 @@ def test_close_keeps_folder_when_checked(
     for row in rows:  # cached thumbnails still on disk
         assert Path(row.thumbnail).exists()
     assert db.load_scan(db.scan_key(video_folder, False)) is not None
+
+
+def test_close_can_discard_cache_without_remembering_folder(
+    qapp, cache_dir, video_folder, db, file_settings, monkeypatch
+):
+    monkeypatch.setattr(
+        exit_dialog,
+        "ask_exit_choices",
+        lambda parent, folder, n: exit_dialog.ExitChoices(False, False),
+    )
+    win = MainWindow()
+    win.show()
+    try:
+        win._open_folder(video_folder)
+        assert pump(qapp, lambda: _thumbs_ready(win), timeout=60), \
+            "grid/thumbnails unfinished"
+        win.close()
+    finally:
+        win.deleteLater()
+
+    s = _read_settings(file_settings)
+    assert s.value(config.SETTING_LAST_FOLDER) is None
+    assert s.value(config.SETTING_RECURSIVE) is None
+    assert db.videos_under(video_folder.absolute().as_posix()) == []
+    assert db.load_scan(db.scan_key(video_folder, False)) is None
