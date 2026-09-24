@@ -194,6 +194,30 @@ def test_open_folder_reveals_selection_in_sidebar(qapp, cache_dir, tmp_path,
         win.close()
 
 
+def test_reveal_through_already_expanded_ancestors(qapp, tmp_path):
+    # Expanded (loaded) ancestors never emit directoryLoaded again, so the
+    # reveal must walk through them instead of waiting (Quick access clicks
+    # after the user has browsed the tree used to leave the selection put).
+    root, alpha, beta = _tree(tmp_path)
+    sub = alpha / "sub"
+    # Whole-disk tree, as in the app: set_root() changes the load timing
+    # enough to hide the stall.
+    sidebar = FolderSidebar()
+    sidebar.show()
+    try:
+        for target in (sub, beta, sub):
+            sidebar.select_path(target)
+            assert pump(
+                qapp,
+                lambda: Path(sidebar._fs_model.filePath(sidebar.currentIndex()))
+                == target,
+                timeout=10,
+            ), target
+    finally:
+        sidebar.deleteLater()
+        qapp.processEvents()
+
+
 def test_toggle_hides_sidebar_and_persists(qapp, cache_dir, tmp_path,
                                            file_settings):
     win = MainWindow()

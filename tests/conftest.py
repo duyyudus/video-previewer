@@ -54,6 +54,8 @@ def _clean_settings(qapp):
     s.remove(config.SETTING_WINDOW_GEOMETRY)
     s.remove(config.SETTING_SIDEBAR_VISIBLE)
     s.remove(config.SETTING_SIDEBAR_SPLITTER)
+    s.remove(config.SETTING_QUICK_ACCESS)
+    s.remove(config.SETTING_QUICK_ACCESS_SPLITTER)
     s.remove(config.SETTING_SORT_KEY)
     s.remove(config.SETTING_SORT_ORDER)
     yield

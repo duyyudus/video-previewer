@@ -69,7 +69,11 @@ src/video_previewer/
 │   │                  #   double-click loads a folder, single click never does;
 │   │                  #   accepts Move drops of file URLs onto a folder row,
 │   │                  #   highlighting the would-be target (reports to the
-│   │                  #   window; never lets QFileSystemModel move natively)
+│   │                  #   window; never lets QFileSystemModel move natively);
+│   │                  #   right-click pins/unpins a folder to Quick access
+│   ├── quick_access.py    # Quick access list above the tree: pinned
+│   │                  #   folders as full paths (QSettings JSON), click loads, drag to
+│   │                  #   reorder, missing folders dimmed + inert
 │   └── exit_dialog.py # keep/discard prompt on close
 ├── models/
 │   ├── video_item.py  # VideoItem dataclass; video_id() = sha1(path|size|mtime)
@@ -149,7 +153,7 @@ scripts/render_check.py
 - **Tunables live in `settings.yml`** (project root) — thumbnail
   geometry/timeout/concurrency, scan batch size, grid metrics, autoplay
   delay, seek throttle, double-click drift limit, default window size, sidebar
-  width, supported extensions, rotation / ratio-change / MP4-conversion GPU use (`rotate_use_cuda`,
+  width, Quick access height, supported extensions, rotation / ratio-change / MP4-conversion GPU use (`rotate_use_cuda`,
   `aspect_use_cuda`, `convert_use_cuda`). `config.py` loads them with built-in defaults
   (fail soft; out-of-range numbers are clamped) and re-exports them as module
   constants; feature code keeps reading `config.X`. Do not scatter magic
@@ -174,7 +178,8 @@ scripts/render_check.py
   must stay stable or the cache silently invalidates.
 - Platform notes: the exit prompt (`exit_dialog.ask_keep_on_exit`) guards
   `closeEvent`; the last folder + recursive toggle persist via `QSettings`,
-  as do the window geometry, the sidebar toggle, and its split width, and the
+  as do the window geometry, the sidebar toggle, its split width, the Quick
+  access pins (`SETTING_QUICK_ACCESS`) and their split height, and the
   grid's sort key + order (`config.SETTING_SORT_KEY` / `SETTING_SORT_ORDER`).
 
 ## Commit messages

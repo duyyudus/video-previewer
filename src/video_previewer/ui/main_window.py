@@ -61,6 +61,7 @@ from ..models.video_model import VideoModel
 from ..ui import delete_dialog, exit_dialog, rename_dialog, rotate_dialog
 from ..ui.folder_sidebar import FolderSidebar
 from ..ui.info_bar import InfoBar
+from ..ui.quick_access import QuickAccessList
 from ..ui.settings_dialog import CacheClearJob, SettingsDialog
 from ..ui.video_grid import VideoGrid
 from ..workers.aspect_worker import AspectJob, AspectReport, AspectSignals
@@ -125,6 +126,12 @@ class MainWindow(QMainWindow):
         # folder into the grid through the same funnel as the picker.
         self._sidebar = FolderSidebar(self)
         self._sidebar.folder_activated.connect(self._on_sidebar_folder_activated)
+        # Quick access: pinned folders above the tree; a click loads one,
+        # and the tree's context menu pins/unpins.
+        self._quick_access = QuickAccessList(self._settings, self)
+        self._quick_access.folder_activated.connect(self._on_sidebar_folder_activated)
+        self._sidebar.is_pinned = self._quick_access.is_pinned
+        self._sidebar.pin_toggled.connect(self._quick_access.toggle_pin)
         self._rescan_action = QAction("Rescan Folder", self)
         self._rescan_action.setShortcut(QKeySequence("F5"))
         self._rescan_action.triggered.connect(self._rescan_current_folder)
@@ -238,7 +245,16 @@ class MainWindow(QMainWindow):
         # (hiding it is the toggle button's job, not the splitter's).
         self._splitter = QSplitter(Qt.Orientation.Horizontal, self)
         self._splitter.setChildrenCollapsible(False)
-        self._splitter.addWidget(self._sidebar)
+        # Left pane: Quick access over the folder tree, split vertically.
+        self._sidebar_pane = QSplitter(Qt.Orientation.Vertical, self)
+        self._sidebar_pane.setChildrenCollapsible(False)
+        self._sidebar_pane.addWidget(
+            self._titled("Quick access", self._quick_access)
+        )
+        self._sidebar_pane.addWidget(self._titled("Folders", self._sidebar))
+        self._sidebar_pane.setStretchFactor(0, 0)
+        self._sidebar_pane.setStretchFactor(1, 1)
+        self._splitter.addWidget(self._sidebar_pane)
         # The grid sits above a thin info bar (selection size, ...); both
         # share the splitter's right pane.
         grid_pane = QWidget(self)
@@ -282,7 +298,12 @@ class MainWindow(QMainWindow):
         # *change*, so a persisted "hidden" (the button's default) would
         # never reach the sidebar otherwise.
         self._sidebar_btn.setChecked(visible)
-        self._sidebar.setVisible(visible)
+        self._sidebar_pane.setVisible(visible)
+        state = self._settings.value(config.SETTING_QUICK_ACCESS_SPLITTER)
+        if state:
+            self._sidebar_pane.restoreState(state)
+        else:
+            self._sidebar_pane.setSizes([config.QUICK_ACCESS_HEIGHT, 1])
         state = self._settings.value(config.SETTING_SIDEBAR_SPLITTER)
         if state:
             self._splitter.restoreState(state)
@@ -495,8 +516,22 @@ class MainWindow(QMainWindow):
 
     # -- sidebar -----------------------------------------------------------------------
 
+    def _titled(self, title: str, body: QWidget) -> QWidget:
+        """*body* under a small caption (one sidebar section)."""
+        section = QWidget(self)
+        box = QVBoxLayout(section)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(2)
+        caption = QLabel(title, section)
+        caption.setStyleSheet("color: #9a9aa5;")
+        box.addWidget(caption)
+        box.addWidget(body, 1)
+        return section
+
     def _on_sidebar_toggled(self, visible: bool) -> None:
-        self._sidebar.setVisible(visible)
+        self._sidebar_pane.setVisible(visible)
+        if visible:
+            self._quick_access.refresh()
         self._settings.setValue(config.SETTING_SIDEBAR_VISIBLE, visible)
 
     def _on_sidebar_folder_activated(self, path: str) -> None:
@@ -1257,6 +1292,9 @@ class MainWindow(QMainWindow):
         self._settings.setValue(
             config.SETTING_SIDEBAR_SPLITTER, self._splitter.saveState()
         )
+        self._settings.setValue(
+            config.SETTING_QUICK_ACCESS_SPLITTER, self._sidebar_pane.saveState()
+        )
         self._settings.sync()
         folder = self._current_folder
         # Ask before draining so the user is not kept waiting for workers.
@@ -1338,3 +1376,7 @@ class MainWindow(QMainWindow):
     @property
     def sidebar(self) -> FolderSidebar:
         return self._sidebar
+
+    @property
+    def quick_access(self) -> QuickAccessList:
+        return self._quick_access

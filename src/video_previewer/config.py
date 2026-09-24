@@ -32,6 +32,8 @@ SETTING_RECURSIVE = "recursive"
 SETTING_WINDOW_GEOMETRY = "window_geometry"
 SETTING_SIDEBAR_VISIBLE = "sidebar_visible"
 SETTING_SIDEBAR_SPLITTER = "sidebar_splitter_state"
+SETTING_QUICK_ACCESS = "quick_access"
+SETTING_QUICK_ACCESS_SPLITTER = "quick_access_splitter_state"
 SETTING_SORT_KEY = "sort_key"
 SETTING_SORT_ORDER = "sort_order"
 
@@ -85,6 +87,8 @@ DEFAULTS: dict[str, Any] = {
     "search_debounce_ms": 150,
     # Folder sidebar: initial width (px) before any remembered splitter state.
     "sidebar_width": 260,
+    # Quick access list: initial height (px) above the folder tree.
+    "quick_access_height": 140,
     # Video rotation: use NVIDIA NVENC/CUDA when the GPU and ffmpeg support
     # it (falls back to the CPU encoder automatically).
     "rotate_use_cuda": True,
@@ -129,6 +133,7 @@ DEFAULT_WINDOW_HEIGHT: int
 SEARCH_BOX_WIDTH: int
 SEARCH_DEBOUNCE_MS: int
 SIDEBAR_WIDTH: int
+QUICK_ACCESS_HEIGHT: int
 ROTATE_USE_CUDA: bool
 ASPECT_USE_CUDA: bool
 CONVERT_USE_CUDA: bool
@@ -306,7 +311,7 @@ def load_settings() -> None:
     global AUTOPLAY_DELAY_MS, SEEK_THROTTLE_MS, DOUBLE_CLICK_MAX_DIST
     global DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT, SEARCH_BOX_WIDTH
     global SEARCH_DEBOUNCE_MS
-    global SIDEBAR_WIDTH, ROTATE_USE_CUDA, ASPECT_USE_CUDA, CONVERT_USE_CUDA
+    global SIDEBAR_WIDTH, QUICK_ACCESS_HEIGHT, ROTATE_USE_CUDA, ASPECT_USE_CUDA, CONVERT_USE_CUDA
     global CACHE_DIR
 
     _settings_data.clear()
@@ -348,6 +353,7 @@ def load_settings() -> None:
     SEARCH_BOX_WIDTH = _num("search_box_width", int, minimum=120)
     SEARCH_DEBOUNCE_MS = _num("search_debounce_ms", int, minimum=0)
     SIDEBAR_WIDTH = _num("sidebar_width", int, minimum=120)
+    QUICK_ACCESS_HEIGHT = _num("quick_access_height", int, minimum=40)
     ROTATE_USE_CUDA = _bool("rotate_use_cuda")
     ASPECT_USE_CUDA = _bool("aspect_use_cuda")
     CONVERT_USE_CUDA = _bool("convert_use_cuda")

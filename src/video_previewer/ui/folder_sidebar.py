@@ -5,13 +5,15 @@ for browsing the filesystem and picking the folder shown in the grid. The
 model loads directory contents lazily, so browsing never blocks the GUI
 thread, and the tree keeps itself current when folders appear or disappear
 on disk. Accepts Move drops of file URLs onto a folder row (see
-``files_dropped``).
+``files_dropped``). Right-click offers pinning a folder to Quick access
+(see ``pin_toggled``).
 """
 
 from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import QDir, QModelIndex, QRectF, Qt, Signal
@@ -19,6 +21,7 @@ from PySide6.QtGui import QColor, QPalette, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFileSystemModel,
+    QMenu,
     QTreeView,
     QWidget,
 )
@@ -44,6 +47,8 @@ class FolderSidebar(QTreeView):
     #: Local file paths (list of str) dragged from the grid onto a folder
     #: row, and that folder's path (str); the window performs the move.
     files_dropped = Signal(list, str)
+    #: Absolute path of a folder whose Quick access pin should flip.
+    pin_toggled = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -86,6 +91,11 @@ class FolderSidebar(QTreeView):
         self._fs_model.directoryLoaded.connect(self._on_directory_loaded)
         self.clicked.connect(self._on_clicked)
         self.doubleClicked.connect(self._on_double_clicked)
+        # Asked when the context menu opens, to label Pin vs Unpin; the
+        # window points it at the Quick access list.
+        self.is_pinned: Callable[[str], bool] = lambda _path: False
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_context_menu)
 
     # -- root + selection ---------------------------------------------------------
 
@@ -137,11 +147,14 @@ class FolderSidebar(QTreeView):
 
     def _reveal_step(self) -> None:
         chain = self._reveal_chain
-        if not chain:
-            return
-        candidate = chain[0]
-        index = self._fs_model.index(str(candidate))
-        if index.isValid():
+        # Walk down every level that is already in the model: an ancestor
+        # that was expanded (loaded) earlier never emits ``directoryLoaded``
+        # again, so waiting for one there would stall the reveal.
+        while chain:
+            candidate = chain[0]
+            index = self._fs_model.index(str(candidate))
+            if not index.isValid():
+                break
             chain.pop(0)
             if chain:
                 # Loading this level's children unlocks the next candidate.
@@ -149,12 +162,19 @@ class FolderSidebar(QTreeView):
             else:
                 self.setCurrentIndex(index)
                 self.scrollTo(index, QAbstractItemView.ScrollHint.EnsureVisible)
+                return
+        if not chain:
             return
+        candidate = chain[0]
         parent = candidate.parent
         if parent != candidate:
             parent_index = self._fs_model.index(str(parent))
             if parent_index.isValid():
                 self.expand(parent_index)
+                # Already expanded: expand() is a no-op, so ask for the
+                # listing directly (its directoryLoaded resumes the walk).
+                if self._fs_model.canFetchMore(parent_index):
+                    self._fs_model.fetchMore(parent_index)
 
     def _on_directory_loaded(self, path: str) -> None:
         pending = self._root_pending
@@ -180,6 +200,17 @@ class FolderSidebar(QTreeView):
             return
         self.expand(index)  # opening a folder always ends with children shown
         self.folder_activated.emit(self._fs_model.filePath(index))
+
+    def _show_context_menu(self, pos) -> None:
+        index = self.indexAt(pos)
+        if not index.isValid() or not self._fs_model.isDir(index):
+            return
+        path = self._fs_model.filePath(index)
+        menu = QMenu(self)
+        label = "Unpin from Quick access" if self.is_pinned(path) else "Pin to Quick access"
+        action = menu.addAction(label)
+        if menu.exec(self.viewport().mapToGlobal(pos)) is action:
+            self.pin_toggled.emit(path)
 
     # -- drops from the grid -----------------------------------------------------------
 
