@@ -1,4 +1,4 @@
-"""Dialogs for the rotate action: overwrite prompt + modal progress."""
+"""Dialogs for the rotate and convert actions: overwrite prompts + modal progress."""
 
 from __future__ import annotations
 
@@ -38,12 +38,44 @@ def ask_overwrite(
         f"Yes replaces the original. No keeps the original in a "
         f"{BACKUP_DIR_NAME} folder next to it."
     )
+    return _ask_yes_no_cancel(box, filenames)
+
+
+def ask_convert_overwrite(
+    parent: QWidget, filenames: Sequence[str], skipped: int = 0
+) -> bool | None:
+    """True: delete the originals after converting; False: keep them in
+    ``.vpbackup/``; None: cancel the conversion. *skipped* counts selected
+    videos that already are MP4 and will be left alone."""
+    count = len(filenames)
+    what = f'"{filenames[0]}"' if count == 1 else f"{count} videos"
+    box = QMessageBox(
+        QMessageBox.Icon.Question,
+        config.APP_NAME,
+        f"Convert {what} to MP4 and overwrite the original"
+        f"{' file' if count == 1 else 's'}?",
+        parent=parent,
+    )
+    info = (
+        f"Yes deletes the original. No keeps the original in a "
+        f"{BACKUP_DIR_NAME} folder next to it."
+    )
+    if skipped:
+        info += (
+            f"\n\n{skipped} selected video{' is' if skipped == 1 else 's are'} "
+            "already MP4 and will be skipped."
+        )
+    box.setInformativeText(info)
+    return _ask_yes_no_cancel(box, filenames)
+
+
+def _ask_yes_no_cancel(box: QMessageBox, filenames: Sequence[str]) -> bool | None:
     yes = box.addButton(QMessageBox.StandardButton.Yes)
     no = box.addButton(QMessageBox.StandardButton.No)
     cancel = box.addButton(QMessageBox.StandardButton.Cancel)
     box.setDefaultButton(no)
     box.setEscapeButton(cancel)
-    if count > 1:
+    if len(filenames) > 1:
         box.setDetailedText("\n".join(filenames))
     box.exec()
     clicked = box.clickedButton()
@@ -55,7 +87,7 @@ def ask_overwrite(
 
 
 class RotateProgressDialog(QDialog):
-    """Application-modal progress while videos are rotated.
+    """Application-modal progress while videos are rotated or converted.
 
     The whole app is locked until the job reports back. Cancel, Esc, or
     closing the window only *request* cancellation: the dialog stays up
@@ -65,9 +97,11 @@ class RotateProgressDialog(QDialog):
 
     cancel_requested = Signal()
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self, parent: QWidget | None = None, title: str = "Rotating videos"
+    ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Rotating videos")
+        self.setWindowTitle(title)
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
         self.setMinimumWidth(460)
         self._label = QLabel("Starting…", self)

@@ -1,7 +1,6 @@
 """Background video rotation (QRunnable).
 
-Rotates a batch of files one after another (a single encode already keeps
-the CPU/GPU busy), reporting overall progress weighted by duration. Each
+Rotates a batch of files one after another (see :mod:`.encode_job`). Each
 finished file is installed immediately — overwriting the original, or after
 moving it to ``.vpbackup/`` — so a cancellation keeps the files already done
 and leaves the rest untouched.
@@ -10,15 +9,15 @@ and leaves the rest untouched.
 from __future__ import annotations
 
 import logging
-import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRunnable, Signal, Slot
+from PySide6.QtCore import QObject, Signal
 
 from .. import config
 from ..media import rotator
 from ..media.rotator import RotateDirection
+from .encode_job import EncodeJob
 
 log = logging.getLogger(__name__)
 
@@ -36,7 +35,9 @@ class RotateSignals(QObject):
     finished = Signal(object)    # RotateReport
 
 
-class RotateJob(QRunnable):
+class RotateJob(EncodeJob):
+    VERB = "Rotating"
+
     def __init__(
         self,
         paths: list[Path],
@@ -45,71 +46,23 @@ class RotateJob(QRunnable):
         signals: RotateSignals,
         use_cuda: bool | None = None,
     ) -> None:
-        super().__init__()
-        self._paths = list(paths)
+        super().__init__(
+            paths, signals, config.ROTATE_USE_CUDA if use_cuda is None else use_cuda
+        )
         self._direction = direction
         self._overwrite = overwrite
-        self._signals = signals
-        self._use_cuda = config.ROTATE_USE_CUDA if use_cuda is None else use_cuda
-        self._cancel = threading.Event()
-        # Progress bookkeeping (worker thread only).
-        self._total = 1.0
-        self._done = 0.0
-        self._weight = 0.0
-        self._base = self._status = ""
-        self.setAutoDelete(True)
 
-    def cancel(self) -> None:
-        """Thread-safe: stops the running ffmpeg and skips remaining files."""
-        self._cancel.set()
+    def _new_report(self) -> RotateReport:
+        return RotateReport()
 
-    @Slot()
-    def run(self) -> None:
-        report = RotateReport()
-        try:
-            self._rotate_all(report)
-        except Exception as exc:  # noqa: BLE001 - never lose the finished signal
-            log.exception("rotation job failed")
-            report.failed.append(f"unexpected error: {exc}")
-        finally:
-            report.cancelled = self._cancel.is_set()
-            self._signals.finished.emit(report)
+    def _probe(self, path: Path) -> rotator.SourceInfo | None:
+        return rotator.probe_source(path)
 
-    def _rotate_all(self, report: RotateReport) -> None:
-        count = len(self._paths)
-        self._signals.progress.emit(0, "Reading video information…")
-        infos = [rotator.probe_source(p) for p in self._paths]
-        known = [i.duration_s for i in infos if i and i.duration_s > 0]
-        fallback = sum(known) / len(known) if known else 1.0
-        weights = [i.duration_s if i and i.duration_s > 0 else fallback for i in infos]
-        self._total = sum(weights) or 1.0
-        self._done = 0.0
-        for n, (src, info, weight) in enumerate(zip(self._paths, infos, weights), 1):
-            if self._cancel.is_set():
-                return
-            self._weight = weight
-            self._status = self._base = f"Rotating {n} of {count}: {src.name}"
-            self._emit(0.0)
-            if not src.exists():
-                report.failed.append(f"{src.name}: file not found")
-            elif info is None:
-                report.failed.append(f"{src.name}: not a readable video")
-            else:
-                self._rotate_one(src, info, report)
-            self._done += weight
-        self._emit(0.0)
+    @staticmethod
+    def _duration(info: rotator.SourceInfo) -> float:
+        return info.duration_s
 
-    def _emit(self, fraction: float) -> None:
-        """Overall progress: finished files plus *fraction* of the current one."""
-        permille = int(1000 * (self._done + self._weight * fraction) / self._total)
-        self._signals.progress.emit(min(1000, permille), self._status)
-
-    def _on_encoder(self, encoder: str) -> None:
-        device = "NVIDIA GPU" if encoder.endswith("_nvenc") else "CPU"
-        self._status = f"{self._base}\nEncoder: {encoder} ({device})"
-        self._emit(0.0)
-
-    def _rotate_one(
+    def _process_one(
         self, src: Path, info: rotator.SourceInfo, report: RotateReport
     ) -> None:
         tmp = rotator.temp_output_path(src)

@@ -271,8 +271,8 @@ def test_rotate_selection_keeps_backups(qapp, cache_dir, tmp_path, monkeypatch):
         _open(win, qapp, folder, 2)
         old_items = [win.model.item_at(r) for r in range(2)]
         _rotate(win, qapp, monkeypatch, overwrite=False)
-        assert win._rotate_dialog is not None and win._rotate_dialog.isModal()
-        assert pump(qapp, lambda: win._rotate_job is None, timeout=120)
+        assert win._encode_dialog is not None and win._encode_dialog.isModal()
+        assert pump(qapp, lambda: win._encode_job is None, timeout=120)
 
         for p in (a, b):
             assert _dims(p) == (180, 320)
@@ -286,7 +286,7 @@ def test_rotate_selection_keeps_backups(qapp, cache_dir, tmp_path, monkeypatch):
             assert new.size == old.path.stat().st_size
             assert new.vid != old.vid
             assert win._db.get_video(old.vid) is None
-        assert win._rotate_dialog is None
+        assert win._encode_dialog is None
     finally:
         win.close()
 
@@ -301,21 +301,21 @@ def test_rotate_overwrite_and_cancel(qapp, cache_dir, tmp_path, monkeypatch):
 
         # Declining the prompt does nothing.
         _rotate(win, qapp, monkeypatch, overwrite=None)
-        assert win._rotate_job is None
+        assert win._encode_job is None
 
         # Cancel right away: the original is untouched, no temp left behind.
         original = a.read_bytes()
         _rotate(win, qapp, monkeypatch, overwrite=True)
-        dialog = win._rotate_dialog
+        dialog = win._encode_dialog
         dialog.close()  # closing the progress dialog cancels
         assert dialog.cancelling and dialog.isVisible()  # stays up until done
-        assert pump(qapp, lambda: win._rotate_job is None, timeout=60)
+        assert pump(qapp, lambda: win._encode_job is None, timeout=60)
         assert a.read_bytes() == original
         assert sorted(p.name for p in folder.iterdir()) == ["a.mp4"]
 
         # Overwrite: rotated in place, no backup folder.
         _rotate(win, qapp, monkeypatch, overwrite=True)
-        assert pump(qapp, lambda: win._rotate_job is None, timeout=120)
+        assert pump(qapp, lambda: win._encode_job is None, timeout=120)
         assert _dims(a) == (180, 320)
         assert sorted(p.name for p in folder.iterdir()) == ["a.mp4"]
     finally:

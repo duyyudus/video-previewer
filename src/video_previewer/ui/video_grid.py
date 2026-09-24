@@ -10,7 +10,7 @@ A double-click opens the tile's video with the OS-default player; on empty
 grid space (no video under the pointer) it emits ``open_folder_requested``
 so the window can offer its folder picker. Enter opens the current (selected)
 tile the same way. Right-clicking a tile opens a context menu with actions
-on the selection (rotate).
+on the selection (rotate, convert to MP4).
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ from PySide6.QtWidgets import QAbstractItemView, QListView, QMenu
 
 from .. import config
 from ..media.player import PreviewPlayer
+from ..media.converter import is_mp4_like
 from ..media.rotator import RotateDirection
 from ..media.seek_bar import WIDGET_HEIGHT as SEEK_STRIP_HEIGHT
 from ..models.video_model import VideoModel
@@ -70,6 +71,8 @@ class VideoGrid(QListView):
     #: Emitted from the tile context menu with a :class:`RotateDirection`;
     #: the window rotates the selected videos.
     rotate_requested = Signal(object)
+    #: Emitted from the tile context menu: convert the selection to MP4.
+    convert_requested = Signal()
     #: A tile drag began with these source paths (before the modal drag
     #: loop runs). The window uses this to reset its "drop handled internally"
     #: latch so it can tell a sidebar drop from a file-manager drop below.
@@ -321,6 +324,13 @@ class VideoGrid(QListView):
             action.triggered.connect(
                 lambda _=False, d=direction: self.rotate_requested.emit(d)
             )
+        convert = menu.addAction("Convert to MP4")
+        convert.triggered.connect(lambda _=False: self.convert_requested.emit())
+        # Nothing to do when every selected video already is MP4.
+        convert.setEnabled(any(
+            item is not None and not is_mp4_like(item.path)
+            for item in (self._model.item_at(i.row()) for i in sel.selectedRows())
+        ))
         return menu
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802

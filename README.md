@@ -80,6 +80,20 @@ Then click **Open Folder…** and pick a folder with videos.
   `settings.yml`), with automatic CPU fallback. The app is locked behind a
   progress dialog while it works; closing that dialog cancels (files already
   finished stay rotated, the one in progress is left untouched).
+* **Convert to MP4** — right-click one or more selected tiles → **Convert to
+  MP4**. Videos that already are MP4 (`.mp4`, `.m4v`, `.mov`) are skipped;
+  the menu entry is disabled when nothing is left to convert. Same prompt as
+  rotation: **Yes** deletes the originals, **No** keeps each one in
+  `.vpbackup/`. Whenever MP4 can hold the source codecs (H.264, HEVC, AV1,
+  MPEG-4; AAC, MP3, AC-3, FLAC, Opus, …) the file is only remuxed — a
+  lossless stream copy. Otherwise the video is re-encoded (VP9 → HEVC, the
+  rest → H.264) at the source bitrate, or at visually-lossless constant
+  quality for intra/lossless sources such as ProRes; other audio becomes AAC,
+  text subtitles become MP4 subtitles (image subtitles are dropped). The
+  re-encode uses an NVIDIA GPU when available (`convert_use_cuda` in
+  `settings.yml`) with automatic CPU fallback. `name.mkv` becomes
+  `name.mp4` (or `name (1).mp4` if that is taken) with the date modified
+  kept.
 * **Drag to move** — drag one or more selected tiles onto a folder in the
   sidebar (the would-be target folder gets highlighted) to move the files
   there; their cached thumbnails move with them. Dragging onto a

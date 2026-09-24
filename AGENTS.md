@@ -54,14 +54,14 @@ src/video_previewer/
 │   │                  #   migrate cache + patch scan cache + update rows)
 │   ├── video_grid.py  # VideoGrid (QListView) + responsive column layout;
 │   │                  #   click/Ctrl/Shift/rubber-band selection, F2 rename,
-│   │                  #   right-click context menu (Rotate);
+│   │                  #   right-click context menu (Rotate, Convert to MP4);
 │   │                  #   drags the selection out as file URLs — a press on
 │   │                  #   the timeline strip (scrub) or on empty space
 │   │                  #   (rubber band) never becomes a drag
 │   ├── video_delegate.py  # tile painting (thumbnail + filename), hover/scrub
 │   ├── rename_dialog.py   # F2 rename: edit the stem, extension fixed
-│   ├── rotate_dialog.py   # rotate: overwrite-or-backup prompt + app-modal
-│   │                  #   progress dialog (closing it cancels)
+│   ├── rotate_dialog.py   # rotate + convert: overwrite-or-backup prompts +
+│   │                  #   app-modal progress dialog (closing it cancels)
 │   ├── folder_sidebar.py  # folder tree sidebar (QTreeView + QFileSystemModel);
 │   │                  #   double-click loads a folder, single click never does;
 │   │                  #   accepts Move drops of file URLs onto a folder row,
@@ -85,13 +85,19 @@ src/video_previewer/
 │   ├── rotator.py     # 90° rotation re-encode (source codec + bitrate,
 │   │                  #   NVENC/CUDA first, CPU fallback) + install with
 │   │                  #   optional .vpbackup/ of the original
+│   ├── converter.py   # Convert to MP4: remux when MP4 holds the codecs,
+│   │                  #   else re-encode (NVENC/CUDA first, CPU fallback);
+│   │                  #   reuses rotator's probing/encoder/run helpers
 │   └── seek_bar.py    # SeekBarOverlay timeline bar over the hovered tile
 ├── cache/
 │   ├── database.py    # SQLite (WAL, lock-guarded) — videos + scans tables
 │   └── cache.py       # ThumbnailCache: hydrate/store/purge policy
 └── workers/
     ├── scanner.py     # QRunnable folder walk, emits batches of SCAN_BATCH
-    ├── rotate_worker.py     # RotateJob: sequential, cancellable rotation
+    ├── encode_job.py        # EncodeJob: sequential, cancellable ffmpeg
+    │                        #   batch base (progress, cancel, reporting)
+    ├── rotate_worker.py     # RotateJob(EncodeJob): rotation
+    ├── convert_worker.py    # ConvertJob(EncodeJob): convert to MP4
     └── thumbnail_worker.py  # ThumbnailQueue: bounded, deduplicated
                              #   QThreadPool jobs (THUMB_CONCURRENCY)
 
@@ -134,7 +140,8 @@ scripts/render_check.py
 - **Tunables live in `settings.yml`** (project root) — thumbnail
   geometry/timeout/concurrency, scan batch size, grid metrics, autoplay
   delay, seek throttle, double-click drift limit, default window size, sidebar
-  width, supported extensions, rotation GPU use (`rotate_use_cuda`). `config.py` loads them with built-in defaults
+  width, supported extensions, rotation / MP4-conversion GPU use (`rotate_use_cuda`,
+  `convert_use_cuda`). `config.py` loads them with built-in defaults
   (fail soft; out-of-range numbers are clamped) and re-exports them as module
   constants; feature code keeps reading `config.X`. Do not scatter magic
   numbers into feature code.

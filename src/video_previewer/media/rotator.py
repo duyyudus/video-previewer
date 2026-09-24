@@ -74,7 +74,7 @@ _ENCODERS: dict[str, tuple[tuple[str, ...], str | None]] = {
     "vp9": (("libvpx-vp9",), None),
     "vp8": (("libvpx",), None),
 }
-_MP4_LIKE = frozenset({".mp4", ".m4v", ".mov"})
+MP4_LIKE = frozenset({".mp4", ".m4v", ".mov"})
 
 
 # -- capability detection ---------------------------------------------------
@@ -176,27 +176,27 @@ def _video_bitrate(
     MP4/MOV report it per stream; Matroska usually only carries a ``BPS``
     tag; otherwise it is the container's total minus the other streams.
     """
-    rate = _stream_bitrate(video)
+    rate = stream_bitrate(video)
     if rate:
         return rate
-    total = _to_int(fmt.get("bit_rate"))
-    size = _to_int(fmt.get("size"))
+    total = to_int(fmt.get("bit_rate"))
+    size = to_int(fmt.get("size"))
     if not total and size and duration > 0:
         total = int(size * 8 / duration)
     if not total:
         return None
-    others = sum(_stream_bitrate(s) or 0 for s in streams if s is not video)
+    others = sum(stream_bitrate(s) or 0 for s in streams if s is not video)
     # Never trust a subtraction that eats most of the file (bad tags).
     return max(total - others, total // 4)
 
 
-def _stream_bitrate(stream: dict) -> int | None:
-    rate = _to_int(stream.get("bit_rate"))
+def stream_bitrate(stream: dict) -> int | None:
+    rate = to_int(stream.get("bit_rate"))
     if rate:
         return rate
     for key, value in (stream.get("tags") or {}).items():
         if key.upper().startswith("BPS"):
-            rate = _to_int(value)
+            rate = to_int(value)
             if rate:
                 return rate
     return None
@@ -301,14 +301,14 @@ def build_command(
         cmd += ["-map", "0:t?"]  # embedded fonts etc.
     cmd += ["-vf", direction.transpose]
     cmd += encoder_args(encoder, bitrate)
-    if encoder in ("libx265", "hevc_nvenc") and suffix in _MP4_LIKE:
+    if encoder in ("libx265", "hevc_nvenc") and suffix in MP4_LIKE:
         cmd += ["-tag:v", "hvc1"]  # QuickTime / Apple players need hvc1
     cmd += [
         "-c:a", "copy", "-c:s", "copy",
         "-map_metadata", "0", "-map_chapters", "0",
         "-max_muxing_queue_size", "4096",
     ]
-    if suffix in _MP4_LIKE:
+    if suffix in MP4_LIKE:
         cmd += ["-movflags", "+faststart"]
     cmd += ["-progress", "pipe:1", "-nostats", str(out)]
     return cmd
@@ -353,19 +353,19 @@ def rotate_file(
             on_encoder(encoder)
         cmd = build_command(ffmpeg, src, out, direction, encoder, bitrate)
         try:
-            error = _run(cmd, duration, on_progress, cancel_event)
+            error = run_ffmpeg(cmd, duration, on_progress, cancel_event)
         except RotateCancelledError:
-            _unlink(out)
+            unlink_quietly(out)
             raise
         if error is None and out.exists() and out.stat().st_size > 0:
             return encoder
-        _unlink(out)
+        unlink_quietly(out)
         last_error = error or "ffmpeg produced no output"
         log.warning("rotating %s with %s failed: %s", src, encoder, last_error)
     raise RotateError(last_error)
 
 
-def _run(
+def run_ffmpeg(
     cmd: list[str],
     duration: float,
     on_progress: Callable[[float], None] | None,
@@ -389,7 +389,7 @@ def _run(
             for line in proc.stdout:
                 key, _, value = line.strip().partition("=")
                 if key == "out_time_us" and on_progress and duration > 0:
-                    us = _to_int(value)
+                    us = to_int(value)
                     if us is not None:
                         on_progress(min(1.0, max(0.0, us / 1e6 / duration)))
             proc.wait()
@@ -451,27 +451,27 @@ def install_rotated(src: Path, rotated: Path, overwrite: bool) -> Path | None:
         log.debug("could not carry timestamps over to %s: %s", rotated, exc)
     if overwrite:
         try:
-            _retry(os.replace, rotated, src)
+            retry_file_op(os.replace, rotated, src)
         except OSError:
-            _unlink(rotated)
+            unlink_quietly(rotated)
             raise
         return None
     backup = unique_backup_path(src)
     try:
         backup.parent.mkdir(exist_ok=True)
-        _retry(os.replace, src, backup)
+        retry_file_op(os.replace, src, backup)
     except OSError:
-        _unlink(rotated)
+        unlink_quietly(rotated)
         raise
     try:
-        _retry(os.replace, rotated, src)
+        retry_file_op(os.replace, rotated, src)
     except OSError:
         # Never leave the user with neither file where they expect it.
         try:
             os.replace(backup, src)
         except OSError:
             log.error("original of %s left at %s", src, backup)
-        _unlink(rotated)
+        unlink_quietly(rotated)
         raise
     return backup
 
@@ -486,7 +486,7 @@ def unique_backup_path(src: Path) -> Path:
     return candidate
 
 
-def _retry(fn: Callable[..., object], *args: object, attempts: int = 10) -> None:
+def retry_file_op(fn: Callable[..., object], *args: object, attempts: int = 10) -> None:
     """Retry a file operation briefly: Windows AV/indexers hold files a moment."""
     for i in range(attempts):
         try:
@@ -498,14 +498,14 @@ def _retry(fn: Callable[..., object], *args: object, attempts: int = 10) -> None
             time.sleep(0.2)
 
 
-def _unlink(path: Path) -> None:
+def unlink_quietly(path: Path) -> None:
     try:
         path.unlink(missing_ok=True)
     except OSError:
         pass
 
 
-def _to_int(value: object) -> int | None:
+def to_int(value: object) -> int | None:
     try:
         return int(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):

@@ -25,6 +25,7 @@ supported_extensions:
   - .webm
   - .avi
   - .m4v
+  - .wmv
 
 # --- Thumbnails ---------------------------------------------------------------
 # Width in pixels of generated thumbnails (height follows the video aspect).
@@ -92,3 +93,10 @@ sidebar_width: 260
 # NVIDIA GPU (NVENC encode + CUDA decode) when available; any GPU failure
 # falls back to the CPU encoder. Set false to always use the CPU.
 rotate_use_cuda: true
+
+# --- Convert to MP4 ----------------------------------------------------------------
+# Converting remuxes (lossless stream copy) whenever MP4 can hold the source
+# codecs, and re-encodes the video only when it cannot. For that re-encode,
+# use the NVIDIA GPU (NVENC encode + CUDA decode) when available; any GPU
+# failure falls back to the CPU encoder. Set false to always use the CPU.
+convert_use_cuda: true
