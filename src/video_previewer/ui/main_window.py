@@ -59,6 +59,7 @@ from ..models.video_item import VideoItem, normalize_path
 from ..models.video_model import VideoModel
 from ..ui import delete_dialog, exit_dialog, rename_dialog, rotate_dialog
 from ..ui.folder_sidebar import FolderSidebar
+from ..ui.info_bar import InfoBar
 from ..ui.settings_dialog import CacheClearJob, SettingsDialog
 from ..ui.video_grid import VideoGrid
 from ..workers.convert_worker import ConvertJob, ConvertReport, ConvertSignals
@@ -234,7 +235,16 @@ class MainWindow(QMainWindow):
         self._splitter = QSplitter(Qt.Orientation.Horizontal, self)
         self._splitter.setChildrenCollapsible(False)
         self._splitter.addWidget(self._sidebar)
-        self._splitter.addWidget(self._grid)
+        # The grid sits above a thin info bar (selection size, ...); both
+        # share the splitter's right pane.
+        grid_pane = QWidget(self)
+        grid_vbox = QVBoxLayout(grid_pane)
+        grid_vbox.setContentsMargins(0, 0, 0, 0)
+        grid_vbox.setSpacing(2)
+        grid_vbox.addWidget(self._grid, 1)
+        self._info_bar = InfoBar(self._grid, self._model, grid_pane)
+        grid_vbox.addWidget(self._info_bar)
+        self._splitter.addWidget(grid_pane)
         self._splitter.setStretchFactor(0, 0)
         self._splitter.setStretchFactor(1, 1)
         vbox.addWidget(self._splitter, 1)
@@ -1273,6 +1283,10 @@ class MainWindow(QMainWindow):
     @property
     def player(self) -> PreviewPlayer:
         return self._player
+
+    @property
+    def info_bar(self) -> InfoBar:
+        return self._info_bar
 
     @property
     def sidebar(self) -> FolderSidebar:

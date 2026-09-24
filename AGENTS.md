@@ -59,6 +59,8 @@ src/video_previewer/
 │   │                  #   the timeline strip (scrub) or on empty space
 │   │                  #   (rubber band) never becomes a drag
 │   ├── video_delegate.py  # tile painting (thumbnail + filename), hover/scrub
+│   ├── info_bar.py    # thin bar under the grid: selection count + total
+│   │                  #   size (recomputed once per burst of changes)
 │   ├── rename_dialog.py   # F2 rename: edit the stem, extension fixed
 │   ├── rotate_dialog.py   # rotate + convert: overwrite-or-backup prompts +
 │   │                  #   app-modal progress dialog (closing it cancels)
