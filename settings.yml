@@ -86,3 +86,9 @@ search_debounce_ms: 150
 # Initial width of the folder-navigation sidebar, in pixels (a remembered
 # width from the previous run wins over this).
 sidebar_width: 260
+
+# --- Video rotation ----------------------------------------------------------------
+# Rotating re-encodes the video at the original codec and bitrate. Use the
+# NVIDIA GPU (NVENC encode + CUDA decode) when available; any GPU failure
+# falls back to the CPU encoder. Set false to always use the CPU.
+rotate_use_cuda: true

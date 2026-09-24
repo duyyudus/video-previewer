@@ -70,6 +70,16 @@ Then click **Open Folder…** and pick a folder with videos.
 * Select one or more tiles and press **Delete** to move their files to the
   system Trash/Recycle Bin. Press **Shift+Delete** to permanently delete
   them after a confirmation prompt.
+* **Rotate** — right-click one or more selected tiles → **Rotate** →
+  **Clockwise** / **Counter-clockwise**. You are asked whether to overwrite
+  the originals; answering **No** keeps each original in a `.vpbackup/` folder
+  next to it. The video is re-encoded with its original codec at its original
+  bitrate (audio, subtitles, and metadata are copied untouched), so quality
+  and file size stay close to the source, and the date modified is kept. An
+  NVIDIA GPU (NVENC + CUDA) is used when available (`rotate_use_cuda` in
+  `settings.yml`), with automatic CPU fallback. The app is locked behind a
+  progress dialog while it works; closing that dialog cancels (files already
+  finished stay rotated, the one in progress is left untouched).
 * **Drag to move** — drag one or more selected tiles onto a folder in the
   sidebar (the would-be target folder gets highlighted) to move the files
   there; their cached thumbnails move with them. Dragging onto a

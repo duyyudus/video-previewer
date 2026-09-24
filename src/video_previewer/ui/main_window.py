@@ -51,13 +51,15 @@ from ..cache.cache import ThumbnailCache
 from ..cache.database import open_database
 from ..file_deletion import move_to_trash
 from ..media.player import PreviewPlayer
+from ..media.rotator import RotateDirection
 from ..models.sorting import SortKey, SortOrder
 from ..models.video_item import VideoItem, normalize_path
 from ..models.video_model import VideoModel
-from ..ui import delete_dialog, exit_dialog, rename_dialog
+from ..ui import delete_dialog, exit_dialog, rename_dialog, rotate_dialog
 from ..ui.folder_sidebar import FolderSidebar
 from ..ui.settings_dialog import CacheClearJob, SettingsDialog
 from ..ui.video_grid import VideoGrid
+from ..workers.rotate_worker import RotateJob, RotateReport, RotateSignals
 from ..workers.scanner import ScanResult, ScanSignals, Scanner
 from ..workers.thumbnail_worker import ThumbnailQueue
 
@@ -102,6 +104,11 @@ class MainWindow(QMainWindow):
         # Delete moves the selection to Trash; Shift+Delete permanently
         # deletes it after an explicit confirmation.
         self._grid.delete_requested.connect(self._delete_selected)
+        # Tile context menu -> Rotate: re-encode the selection rotated 90°
+        # behind an app-modal progress dialog.
+        self._grid.rotate_requested.connect(self._rotate_selected)
+        self._rotate_job: RotateJob | None = None
+        self._rotate_dialog: rotate_dialog.RotateProgressDialog | None = None
         # The sidebar tree is created here too: its double-click loads a
         # folder into the grid through the same funnel as the picker.
         self._sidebar = FolderSidebar(self)
@@ -909,6 +916,99 @@ class MainWindow(QMainWindow):
                 f"Could not {action}:\n" + "\n".join(failed),
             )
 
+    def _rotate_selected(self, direction: RotateDirection) -> None:
+        """Rotate the selected videos 90° in *direction*.
+
+        Asks whether to overwrite the originals (otherwise they move to
+        ``.vpbackup/``), then runs the encode off the GUI thread while an
+        application-modal progress dialog locks the app; closing that dialog
+        cancels. Each finished file is reconciled right away (its identity
+        changed, so the old cache row + JPEG go and a new thumbnail is
+        queued), so a cancel keeps what was already rotated consistent.
+        """
+        if self._closing or self._rotate_job is not None or self._cache_clear_in_progress:
+            return
+        items = [
+            item
+            for index in self._grid.selectionModel().selectedRows()
+            if (item := self._model.item_at(index.row())) is not None
+        ]
+        if not items:
+            return
+        if not config.ffmpeg_path() or not config.ffprobe_path():
+            QMessageBox.warning(
+                self, config.APP_NAME,
+                "Rotating videos requires ffmpeg and ffprobe on PATH.",
+            )
+            return
+        items.sort(key=lambda item: item.filename.casefold())
+        overwrite = rotate_dialog.ask_overwrite(
+            self, [item.filename for item in items], direction
+        )
+        if overwrite is None:
+            return
+        # The shared player must not hold any file that is about to be
+        # replaced (Windows refuses to replace an open file).
+        self._player.leave()
+        self._grid.clear_hover()
+        self._thumbs.cancel_pending(items)
+
+        signals = RotateSignals(self)
+        job = RotateJob([item.path for item in items], direction, overwrite, signals)
+        dialog = rotate_dialog.RotateProgressDialog(self)
+        signals.progress.connect(dialog.set_progress)
+        signals.file_done.connect(self._on_video_rotated)
+        signals.finished.connect(self._on_rotate_finished)
+        dialog.cancel_requested.connect(job.cancel)
+        self._rotate_job = job
+        self._rotate_dialog = dialog
+        dialog.show()  # application-modal: the rest of the app is locked
+        # Ahead of queued thumbnail jobs sharing the global pool.
+        QThreadPool.globalInstance().start(job, 1)
+
+    def _on_video_rotated(self, path_str: str) -> None:
+        """A file now holds its rotated video: refresh its identity + tile."""
+        if self._closing:
+            return
+        path = Path(path_str)
+        row = self._model.row_for(path)
+        old = self._model.item_at(row) if row is not None else None
+        try:
+            st = path.stat()
+        except OSError:
+            return
+        new_item = VideoItem(path, st.st_size, st.st_mtime)
+        if old is not None:
+            self._thumbs.cancel_pending([old])
+            self._cache.remove_items([old])
+        # The scan cache still holds the old size: replaying it would queue a
+        # thumbnail for an identity that no longer exists. The next walk
+        # re-adds the entry with the real one.
+        self._db.remove_scan_entries([path.as_posix()])
+        self._model.update_items([new_item])
+        self._thumbs.request(new_item)
+
+    def _on_rotate_finished(self, report: RotateReport) -> None:
+        self._rotate_job = None
+        dialog, self._rotate_dialog = self._rotate_dialog, None
+        if dialog is not None:
+            dialog.finish()
+            dialog.deleteLater()
+        if self._closing:
+            return
+        self._refresh_search_filter()
+        self._update_status()
+        log.info(
+            "rotation %s: %d rotated, %d failed",
+            "cancelled" if report.cancelled else "finished",
+            len(report.rotated), len(report.failed),
+        )
+        if report.failed:
+            QMessageBox.warning(
+                self, config.APP_NAME,
+                "Could not rotate:\n" + "\n".join(report.failed),
+            )
+
     def _rename_selected(self) -> None:
         """F2: rename the one selected video file (stem only, ext fixed).
 
@@ -1010,6 +1110,10 @@ class MainWindow(QMainWindow):
             else None
         )
         self._player.leave()
+        if self._rotate_job is not None:
+            # Stop ffmpeg; the drain below waits for the job to report back
+            # (the original of the file being encoded stays untouched).
+            self._rotate_job.cancel()
         # The window is still on screen while we pump events: make the grid
         # stop answering the pointer so a stray hover cannot restart the
         # player we just stopped, nor a press pair launch an external player.
@@ -1021,7 +1125,9 @@ class MainWindow(QMainWindow):
         # no-op; the sleep only caps the spin between event pumps.
         deadline = time.time() + 5.0
         while (
-            self._thumbs.pending_count() > 0 or self._cache_clear_in_progress
+            self._thumbs.pending_count() > 0
+            or self._cache_clear_in_progress
+            or self._rotate_job is not None
         ) and time.time() < deadline:
             QCoreApplication.processEvents()
             time.sleep(0.02)

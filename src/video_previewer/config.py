@@ -85,6 +85,9 @@ DEFAULTS: dict[str, Any] = {
     "search_debounce_ms": 150,
     # Folder sidebar: initial width (px) before any remembered splitter state.
     "sidebar_width": 260,
+    # Video rotation: use NVIDIA NVENC/CUDA when the GPU and ffmpeg support
+    # it (falls back to the CPU encoder automatically).
+    "rotate_use_cuda": True,
 }
 
 # Repo-checkout assumption: config.py lives at <root>/src/video_previewer/,
@@ -122,6 +125,7 @@ DEFAULT_WINDOW_HEIGHT: int
 SEARCH_BOX_WIDTH: int
 SEARCH_DEBOUNCE_MS: int
 SIDEBAR_WIDTH: int
+ROTATE_USE_CUDA: bool
 CACHE_DIR: Path | None
 
 
@@ -193,6 +197,16 @@ def _num(
         )
         result = cast(maximum)
     return result
+
+
+def _bool(key: str) -> bool:
+    """Value of *key* as a bool, falling back to its default."""
+    default = bool(DEFAULTS[key])
+    value = _settings_data.get(key, default)
+    if not isinstance(value, bool):
+        log.warning("settings: %s must be true or false, using default %s", key, default)
+        return default
+    return value
 
 
 def _extensions() -> frozenset[str]:
@@ -286,7 +300,7 @@ def load_settings() -> None:
     global AUTOPLAY_DELAY_MS, SEEK_THROTTLE_MS, DOUBLE_CLICK_MAX_DIST
     global DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT, SEARCH_BOX_WIDTH
     global SEARCH_DEBOUNCE_MS
-    global SIDEBAR_WIDTH, CACHE_DIR
+    global SIDEBAR_WIDTH, ROTATE_USE_CUDA, CACHE_DIR
 
     _settings_data.clear()
     _settings_data.update(_read_settings_file())
@@ -327,6 +341,7 @@ def load_settings() -> None:
     SEARCH_BOX_WIDTH = _num("search_box_width", int, minimum=120)
     SEARCH_DEBOUNCE_MS = _num("search_debounce_ms", int, minimum=0)
     SIDEBAR_WIDTH = _num("sidebar_width", int, minimum=120)
+    ROTATE_USE_CUDA = _bool("rotate_use_cuda")
 
 
 load_settings()

@@ -9,7 +9,8 @@ Pointer handling (via an event filter on the viewport) maps each tile to:
 A double-click opens the tile's video with the OS-default player; on empty
 grid space (no video under the pointer) it emits ``open_folder_requested``
 so the window can offer its folder picker. Enter opens the current (selected)
-tile the same way.
+tile the same way. Right-clicking a tile opens a context menu with actions
+on the selection (rotate).
 """
 
 from __future__ import annotations
@@ -29,10 +30,11 @@ from PySide6.QtGui import (
     QPen,
     QPixmap,
 )
-from PySide6.QtWidgets import QAbstractItemView, QListView
+from PySide6.QtWidgets import QAbstractItemView, QListView, QMenu
 
 from .. import config
 from ..media.player import PreviewPlayer
+from ..media.rotator import RotateDirection
 from ..media.seek_bar import WIDGET_HEIGHT as SEEK_STRIP_HEIGHT
 from ..models.video_model import VideoModel
 from ..open_external import open_externally
@@ -65,6 +67,9 @@ class VideoGrid(QListView):
     #: Emitted on Delete while tiles are selected. True means Shift+Delete
     #: requested permanent deletion; False means move to the system trash.
     delete_requested = Signal(bool)
+    #: Emitted from the tile context menu with a :class:`RotateDirection`;
+    #: the window rotates the selected videos.
+    rotate_requested = Signal(object)
     #: A tile drag began with these source paths (before the modal drag
     #: loop runs). The window uses this to reset its "drop handled internally"
     #: latch so it can tell a sidebar drop from a file-manager drop below.
@@ -282,6 +287,41 @@ class VideoGrid(QListView):
                 self._open_item(current.row())
             return
         super().keyPressEvent(event)
+
+    def contextMenuEvent(self, event) -> None:  # noqa: N802
+        if self._closing:
+            event.ignore()
+            return
+        menu = self.context_menu_at(event.pos())
+        if menu is None:
+            return
+        self._clear_hover()  # the preview must not keep playing under the menu
+        menu.exec(event.globalPos())
+        menu.deleteLater()
+
+    def context_menu_at(self, pos: QPoint) -> QMenu | None:
+        """Menu for a right-click at viewport *pos* (None on empty space).
+
+        Explorer-like: right-clicking a tile outside the selection makes it
+        the selection; right-clicking inside keeps the whole selection.
+        """
+        index = self.indexAt(pos)
+        if not index.isValid():
+            return None
+        sel = self.selectionModel()
+        if not sel.isSelected(index):
+            sel.select(
+                index, sel.SelectionFlag.ClearAndSelect | sel.SelectionFlag.Rows
+            )
+            sel.setCurrentIndex(index, sel.SelectionFlag.NoUpdate)
+        menu = QMenu(self)
+        rotate = menu.addMenu("Rotate")
+        for direction in RotateDirection:
+            action = rotate.addAction(direction.label)
+            action.triggered.connect(
+                lambda _=False, d=direction: self.rotate_requested.emit(d)
+            )
+        return menu
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
         # Qt's own double-click delivery (kept for the cases where it works).
