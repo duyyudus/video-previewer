@@ -10,7 +10,7 @@ A double-click opens the tile's video with the OS-default player; on empty
 grid space (no video under the pointer) it emits ``open_folder_requested``
 so the window can offer its folder picker. Enter opens the current (selected)
 tile the same way. Right-clicking a tile opens a context menu with actions
-on the selection (rotate, convert to MP4).
+on the selection (rotate, change ratio, convert to MP4).
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ from PySide6.QtWidgets import QAbstractItemView, QListView, QMenu
 
 from .. import config
 from ..media.player import PreviewPlayer
+from ..media.aspect import PRESETS as ASPECT_PRESETS
 from ..media.converter import is_mp4_like
 from ..media.rotator import RotateDirection
 from ..media.seek_bar import WIDGET_HEIGHT as SEEK_STRIP_HEIGHT
@@ -71,6 +72,9 @@ class VideoGrid(QListView):
     #: Emitted from the tile context menu with a :class:`RotateDirection`;
     #: the window rotates the selected videos.
     rotate_requested = Signal(object)
+    #: Emitted from the tile context menu with an :class:`AspectRatio`;
+    #: the window stretches/squashes the selected videos to it.
+    aspect_requested = Signal(object)
     #: Emitted from the tile context menu: convert the selection to MP4.
     convert_requested = Signal()
     #: A tile drag began with these source paths (before the modal drag
@@ -323,6 +327,12 @@ class VideoGrid(QListView):
             action = rotate.addAction(direction.label)
             action.triggered.connect(
                 lambda _=False, d=direction: self.rotate_requested.emit(d)
+            )
+        ratio_menu = menu.addMenu("Change ratio")
+        for ratio in ASPECT_PRESETS:
+            action = ratio_menu.addAction(ratio.label)
+            action.triggered.connect(
+                lambda _=False, r=ratio: self.aspect_requested.emit(r)
             )
         convert = menu.addAction("Convert to MP4")
         convert.triggered.connect(lambda _=False: self.convert_requested.emit())

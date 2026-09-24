@@ -92,7 +92,7 @@ def test_encoder_args_target_source_bitrate():
 def test_build_command_copies_audio_and_tags_hevc(tmp_path):
     src = tmp_path / "a.mp4"
     cmd = rotator.build_command(
-        FFMPEG, src, tmp_path / "o.mp4", RotateDirection.CLOCKWISE, "hevc_nvenc", 1000
+        FFMPEG, src, tmp_path / "o.mp4", RotateDirection.CLOCKWISE.transpose, "hevc_nvenc", 1000
     )
     assert cmd[cmd.index("-hwaccel") + 1] == "cuda"
     assert cmd[cmd.index("-vf") + 1] == "transpose=1"
@@ -100,7 +100,7 @@ def test_build_command_copies_audio_and_tags_hevc(tmp_path):
     assert cmd[cmd.index("-tag:v") + 1] == "hvc1"
     cpu = rotator.build_command(
         FFMPEG, tmp_path / "a.mkv", tmp_path / "o.mkv",
-        RotateDirection.COUNTER_CLOCKWISE, "libx264", 1000,
+        RotateDirection.COUNTER_CLOCKWISE.transpose, "libx264", 1000,
     )
     assert "-hwaccel" not in cpu
     assert "0:t?" in cpu

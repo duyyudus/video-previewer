@@ -54,7 +54,8 @@ src/video_previewer/
 │   │                  #   migrate cache + patch scan cache + update rows)
 │   ├── video_grid.py  # VideoGrid (QListView) + responsive column layout;
 │   │                  #   click/Ctrl/Shift/rubber-band selection, F2 rename,
-│   │                  #   right-click context menu (Rotate, Convert to MP4);
+│   │                  #   right-click context menu (Rotate, Change ratio,
+│                  #   Convert to MP4);
 │   │                  #   drags the selection out as file URLs — a press on
 │   │                  #   the timeline strip (scrub) or on empty space
 │   │                  #   (rubber band) never becomes a drag
@@ -62,7 +63,7 @@ src/video_previewer/
 │   ├── info_bar.py    # thin bar under the grid: selection count + total
 │   │                  #   size (recomputed once per burst of changes)
 │   ├── rename_dialog.py   # F2 rename: edit the stem, extension fixed
-│   ├── rotate_dialog.py   # rotate + convert: overwrite-or-backup prompts +
+│   ├── rotate_dialog.py   # rotate + ratio + convert: overwrite-or-backup prompts +
 │   │                  #   app-modal progress dialog (closing it cancels)
 │   ├── folder_sidebar.py  # folder tree sidebar (QTreeView + QFileSystemModel);
 │   │                  #   double-click loads a folder, single click never does;
@@ -87,6 +88,11 @@ src/video_previewer/
 │   ├── rotator.py     # 90° rotation re-encode (source codec + bitrate,
 │   │                  #   NVENC/CUDA first, CPU fallback) + install with
 │   │                  #   optional .vpbackup/ of the original
+│   ├── aspect.py      # Change ratio: stretch/squash the width to a
+│   │                  #   preset ratio (height kept); bitrate scales up
+│   │                  #   with the stretch, videos already at the ratio
+│   │                  #   are skipped; rides rotator's re-encode +
+│   │                  #   install helpers
 │   ├── converter.py   # Convert to MP4: remux when MP4 holds the codecs,
 │   │                  #   else re-encode (NVENC/CUDA first, CPU fallback);
 │   │                  #   reuses rotator's probing/encoder/run helpers
@@ -99,6 +105,7 @@ src/video_previewer/
     ├── encode_job.py        # EncodeJob: sequential, cancellable ffmpeg
     │                        #   batch base (progress, cancel, reporting)
     ├── rotate_worker.py     # RotateJob(EncodeJob): rotation
+    ├── aspect_worker.py     # AspectJob(EncodeJob): change ratio
     ├── convert_worker.py    # ConvertJob(EncodeJob): convert to MP4
     └── thumbnail_worker.py  # ThumbnailQueue: bounded, deduplicated
                              #   QThreadPool jobs (THUMB_CONCURRENCY)
@@ -142,8 +149,8 @@ scripts/render_check.py
 - **Tunables live in `settings.yml`** (project root) — thumbnail
   geometry/timeout/concurrency, scan batch size, grid metrics, autoplay
   delay, seek throttle, double-click drift limit, default window size, sidebar
-  width, supported extensions, rotation / MP4-conversion GPU use (`rotate_use_cuda`,
-  `convert_use_cuda`). `config.py` loads them with built-in defaults
+  width, supported extensions, rotation / ratio-change / MP4-conversion GPU use (`rotate_use_cuda`,
+  `aspect_use_cuda`, `convert_use_cuda`). `config.py` loads them with built-in defaults
   (fail soft; out-of-range numbers are clamped) and re-exports them as module
   constants; feature code keeps reading `config.X`. Do not scatter magic
   numbers into feature code.

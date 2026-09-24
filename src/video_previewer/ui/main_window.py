@@ -51,6 +51,7 @@ from .. import config
 from ..cache.cache import ThumbnailCache
 from ..cache.database import open_database
 from ..file_deletion import move_to_trash
+from ..media.aspect import AspectRatio
 from ..media.player import PreviewPlayer
 from ..media.converter import is_mp4_like
 from ..media.rotator import RotateDirection
@@ -62,6 +63,7 @@ from ..ui.folder_sidebar import FolderSidebar
 from ..ui.info_bar import InfoBar
 from ..ui.settings_dialog import CacheClearJob, SettingsDialog
 from ..ui.video_grid import VideoGrid
+from ..workers.aspect_worker import AspectJob, AspectReport, AspectSignals
 from ..workers.convert_worker import ConvertJob, ConvertReport, ConvertSignals
 from ..workers.encode_job import EncodeJob
 from ..workers.rotate_worker import RotateJob, RotateReport, RotateSignals
@@ -112,9 +114,11 @@ class MainWindow(QMainWindow):
         # Tile context menu -> Rotate: re-encode the selection rotated 90°
         # behind an app-modal progress dialog.
         self._grid.rotate_requested.connect(self._rotate_selected)
+        # Tile context menu -> Change ratio: same flow, horizontal stretch.
+        self._grid.aspect_requested.connect(self._change_ratio_selected)
         # Tile context menu -> Convert to MP4: same flow (remux or re-encode).
         self._grid.convert_requested.connect(self._convert_selected)
-        # The one running rotate/convert job and its progress dialog.
+        # The one running rotate/ratio/convert job and its progress dialog.
         self._encode_job: EncodeJob | None = None
         self._encode_dialog: rotate_dialog.RotateProgressDialog | None = None
         # The sidebar tree is created here too: its double-click loads a
@@ -952,13 +956,13 @@ class MainWindow(QMainWindow):
         if overwrite is None:
             return
         signals = RotateSignals(self)
-        signals.file_done.connect(self._on_video_rotated)
+        signals.file_done.connect(self._on_video_reencoded)
         signals.finished.connect(self._on_rotate_finished)
         job = RotateJob([item.path for item in items], direction, overwrite, signals)
         self._start_encode_job(items, job, signals, "Rotating videos")
 
     def _encode_candidates(self, verb: str) -> list[VideoItem]:
-        """Selected items (by name) for a rotate/convert job; [] = stop."""
+        """Selected items (by name) for an encode job; [] = stop."""
         if self._closing or self._encode_job is not None or self._cache_clear_in_progress:
             return []
         items = [
@@ -1008,8 +1012,8 @@ class MainWindow(QMainWindow):
         self._update_status()
         return True
 
-    def _on_video_rotated(self, path_str: str) -> None:
-        """A file now holds its rotated video: refresh its identity + tile."""
+    def _on_video_reencoded(self, path_str: str) -> None:
+        """A file was re-encoded in place: refresh its identity + tile."""
         if self._closing:
             return
         path = Path(path_str)
@@ -1043,6 +1047,49 @@ class MainWindow(QMainWindow):
                 self, config.APP_NAME,
                 "Could not rotate:\n" + "\n".join(report.failed),
             )
+
+    def _change_ratio_selected(self, ratio: AspectRatio) -> None:
+        """Stretch/squash the selected videos horizontally to *ratio*.
+
+        Same flow as :meth:`_rotate_selected`: overwrite-or-backup prompt,
+        then an off-thread re-encode behind the app-modal progress dialog.
+        """
+        items = self._encode_candidates("Changing the ratio of")
+        if not items:
+            return
+        overwrite = rotate_dialog.ask_aspect_overwrite(
+            self, [item.filename for item in items], ratio
+        )
+        if overwrite is None:
+            return
+        signals = AspectSignals(self)
+        signals.file_done.connect(self._on_video_reencoded)
+        signals.finished.connect(self._on_aspect_finished)
+        job = AspectJob([item.path for item in items], ratio, overwrite, signals)
+        self._start_encode_job(items, job, signals, f"Changing ratio to {ratio.label}")
+
+    def _on_aspect_finished(self, report: AspectReport) -> None:
+        if not self._end_encode_job():
+            return
+        log.info(
+            "ratio change %s: %d changed, %d skipped, %d failed",
+            "cancelled" if report.cancelled else "finished",
+            len(report.changed), len(report.skipped), len(report.failed),
+        )
+        skipped = ""
+        if report.skipped:
+            n = len(report.skipped)
+            skipped = (
+                f"{n} video{' was' if n == 1 else 's were'} already "
+                f"{report.ratio} and left unchanged:\n" + "\n".join(report.skipped)
+            )
+        if report.failed:
+            text = "Could not change the ratio of:\n" + "\n".join(report.failed)
+            QMessageBox.warning(
+                self, config.APP_NAME, f"{text}\n\n{skipped}" if skipped else text
+            )
+        elif skipped:
+            QMessageBox.information(self, config.APP_NAME, skipped)
 
     def _convert_selected(self) -> None:
         """Convert the selected non-MP4 videos to MP4 (MP4-like ones skipped).

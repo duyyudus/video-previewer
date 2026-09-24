@@ -64,6 +64,10 @@ class SourceInfo:
     duration_s: float
     vcodec: str | None
     video_bitrate: int | None  # bits/s, best estimate; None when unknown
+    # Picture size as players show it (rotation + pixel aspect applied);
+    # None when ffprobe did not report it.
+    display_width: int | None = None
+    display_height: int | None = None
 
 
 # (CPU candidates in preference order, NVENC encoder or None) per source codec.
@@ -136,7 +140,9 @@ def probe_source(path: Path, ffprobe: str | None = None) -> SourceInfo | None:
         return None
     cmd = [
         ffprobe, "-v", "error",
-        "-show_entries", "stream=index,codec_type,codec_name,bit_rate,disposition:stream_tags",
+        "-show_entries",
+        "stream=index,codec_type,codec_name,bit_rate,width,height,sample_aspect_ratio,"
+        "disposition:stream_tags:stream_side_data=rotation",
         "-show_entries", "format=duration,bit_rate,size",
         "-of", "json", str(path),
     ]
@@ -161,11 +167,40 @@ def probe_source(path: Path, ffprobe: str | None = None) -> SourceInfo | None:
         return None
     video = videos[0]
     duration = _to_float(fmt.get("duration")) or 0.0
+    width, height = display_size(video)
     return SourceInfo(
         duration_s=duration,
         vcodec=video.get("codec_name"),
         video_bitrate=_video_bitrate(video, streams, fmt, duration),
+        display_width=width,
+        display_height=height,
     )
+
+
+def display_size(video: dict) -> tuple[int | None, int | None]:
+    """(width, height) of *video* as shown: what ffmpeg's filters see.
+
+    Non-square pixels widen or narrow the picture; a 90°/270° rotation flag
+    (display matrix, or the legacy ``rotate`` tag) swaps the axes because
+    ffmpeg's autorotate applies it before any filter.
+    """
+    width, height = to_int(video.get("width")), to_int(video.get("height"))
+    if not width or not height:
+        return None, None
+    num, _, den = str(video.get("sample_aspect_ratio") or "").partition(":")
+    sar_num, sar_den = to_int(num), to_int(den)
+    if sar_num and sar_den and sar_num != sar_den:
+        width = round(width * sar_num / sar_den)
+    rotation = next(
+        (
+            r for d in video.get("side_data_list") or []
+            if (r := to_int(d.get("rotation"))) is not None
+        ),
+        to_int((video.get("tags") or {}).get("rotate")) or 0,
+    )
+    if rotation % 180 == 90:  # Python: -90 % 180 == 90 too
+        width, height = height, width
+    return width, height
 
 
 def _video_bitrate(
@@ -281,25 +316,26 @@ def build_command(
     ffmpeg: str,
     src: Path,
     out: Path,
-    direction: RotateDirection,
+    video_filter: str,
     encoder: str,
     bitrate: int | None,
 ) -> list[str]:
+    """Re-encode the video through *video_filter*; other streams are copied."""
     suffix = src.suffix.lower()
     cmd = [ffmpeg, "-hide_banner", "-nostdin", "-v", "error", "-y"]
     if encoder.endswith("_nvenc"):
         # Decode on the GPU too. Frames are downloaded to system memory for
-        # the (cheap) transpose; ffmpeg decodes in software on its own when
+        # the (cheap) filter; ffmpeg decodes in software on its own when
         # CUDA cannot handle the source codec.
         cmd += ["-hwaccel", "cuda"]
     cmd += ["-i", str(src)]
     # First real video stream + every audio/subtitle stream, as-is. ffmpeg's
-    # autorotate applies any existing rotation flag first, so the result is
-    # rotated relative to what the user sees.
+    # autorotate applies any existing rotation flag first, so the filter
+    # works on the picture as the user sees it.
     cmd += ["-map", "0:V:0", "-map", "0:a?", "-map", "0:s?"]
     if suffix == ".mkv":
         cmd += ["-map", "0:t?"]  # embedded fonts etc.
-    cmd += ["-vf", direction.transpose]
+    cmd += ["-vf", video_filter]
     cmd += encoder_args(encoder, bitrate)
     if encoder in ("libx265", "hevc_nvenc") and suffix in MP4_LIKE:
         cmd += ["-tag:v", "hvc1"]  # QuickTime / Apple players need hvc1
@@ -336,6 +372,30 @@ def rotate_file(
 ) -> str:
     """Encode a rotated copy of *src* into *out*; returns the encoder used.
 
+    See :func:`reencode_file` for the encoder chain and error contract.
+    """
+    return reencode_file(
+        src, out, direction.transpose, info,
+        use_cuda=use_cuda, on_progress=on_progress, on_encoder=on_encoder,
+        cancel_event=cancel_event, ffmpeg=ffmpeg, action="rotating",
+    )
+
+
+def reencode_file(
+    src: Path,
+    out: Path,
+    video_filter: str,
+    info: SourceInfo | None,
+    *,
+    use_cuda: bool,
+    on_progress: Callable[[float], None] | None = None,
+    on_encoder: Callable[[str], None] | None = None,
+    cancel_event: threading.Event | None = None,
+    ffmpeg: str | None = None,
+    action: str = "re-encoding",
+) -> str:
+    """Encode *src* through *video_filter* into *out*; returns the encoder used.
+
     Tries each encoder from :func:`choose_encoders` in turn (NVENC first).
     Raises :class:`RotateCancelledError` when *cancel_event* is set and
     :class:`RotateError` when every encoder failed. *out* never survives a
@@ -351,7 +411,7 @@ def rotate_file(
     for encoder in choose_encoders(vcodec, src.suffix, ffmpeg, use_cuda):
         if on_encoder is not None:
             on_encoder(encoder)
-        cmd = build_command(ffmpeg, src, out, direction, encoder, bitrate)
+        cmd = build_command(ffmpeg, src, out, video_filter, encoder, bitrate)
         try:
             error = run_ffmpeg(cmd, duration, on_progress, cancel_event)
         except RotateCancelledError:
@@ -361,7 +421,7 @@ def rotate_file(
             return encoder
         unlink_quietly(out)
         last_error = error or "ffmpeg produced no output"
-        log.warning("rotating %s with %s failed: %s", src, encoder, last_error)
+        log.warning("%s %s with %s failed: %s", action, src, encoder, last_error)
     raise RotateError(last_error)
 
 

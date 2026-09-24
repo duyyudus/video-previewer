@@ -1,4 +1,5 @@
-"""Dialogs for the rotate and convert actions: overwrite prompts + modal progress."""
+"""Dialogs for the rotate, change-ratio, and convert actions: overwrite
+prompts + modal progress."""
 
 from __future__ import annotations
 
@@ -17,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import config
+from ..media.aspect import AspectRatio
 from ..media.rotator import BACKUP_DIR_NAME, RotateDirection
 
 
@@ -35,6 +37,28 @@ def ask_overwrite(
         parent=parent,
     )
     box.setInformativeText(
+        f"Yes replaces the original. No keeps the original in a "
+        f"{BACKUP_DIR_NAME} folder next to it."
+    )
+    return _ask_yes_no_cancel(box, filenames)
+
+
+def ask_aspect_overwrite(
+    parent: QWidget, filenames: Sequence[str], ratio: AspectRatio
+) -> bool | None:
+    """True: overwrite the originals; False: keep them in ``.vpbackup/``;
+    None: cancel the ratio change."""
+    count = len(filenames)
+    what = f'"{filenames[0]}"' if count == 1 else f"{count} selected videos"
+    box = QMessageBox(
+        QMessageBox.Icon.Question,
+        config.APP_NAME,
+        f"Stretch {what} to {ratio.label} and overwrite the original"
+        f"{' file' if count == 1 else 's'}?",
+        parent=parent,
+    )
+    box.setInformativeText(
+        f"The height is kept and the width is stretched or squashed to fit. "
         f"Yes replaces the original. No keeps the original in a "
         f"{BACKUP_DIR_NAME} folder next to it."
     )
@@ -87,7 +111,7 @@ def _ask_yes_no_cancel(box: QMessageBox, filenames: Sequence[str]) -> bool | Non
 
 
 class RotateProgressDialog(QDialog):
-    """Application-modal progress while videos are rotated or converted.
+    """Application-modal progress while videos are rotated, reshaped, or converted.
 
     The whole app is locked until the job reports back. Cancel, Esc, or
     closing the window only *request* cancellation: the dialog stays up

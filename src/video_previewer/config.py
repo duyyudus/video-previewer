@@ -88,6 +88,8 @@ DEFAULTS: dict[str, Any] = {
     # Video rotation: use NVIDIA NVENC/CUDA when the GPU and ffmpeg support
     # it (falls back to the CPU encoder automatically).
     "rotate_use_cuda": True,
+    # Change ratio (stretch/squash): same, for its re-encode.
+    "aspect_use_cuda": True,
     # Convert to MP4: same, for the video re-encode (remuxes need no GPU).
     "convert_use_cuda": True,
 }
@@ -128,6 +130,7 @@ SEARCH_BOX_WIDTH: int
 SEARCH_DEBOUNCE_MS: int
 SIDEBAR_WIDTH: int
 ROTATE_USE_CUDA: bool
+ASPECT_USE_CUDA: bool
 CONVERT_USE_CUDA: bool
 CACHE_DIR: Path | None
 
@@ -303,7 +306,8 @@ def load_settings() -> None:
     global AUTOPLAY_DELAY_MS, SEEK_THROTTLE_MS, DOUBLE_CLICK_MAX_DIST
     global DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT, SEARCH_BOX_WIDTH
     global SEARCH_DEBOUNCE_MS
-    global SIDEBAR_WIDTH, ROTATE_USE_CUDA, CONVERT_USE_CUDA, CACHE_DIR
+    global SIDEBAR_WIDTH, ROTATE_USE_CUDA, ASPECT_USE_CUDA, CONVERT_USE_CUDA
+    global CACHE_DIR
 
     _settings_data.clear()
     _settings_data.update(_read_settings_file())
@@ -345,6 +349,7 @@ def load_settings() -> None:
     SEARCH_DEBOUNCE_MS = _num("search_debounce_ms", int, minimum=0)
     SIDEBAR_WIDTH = _num("sidebar_width", int, minimum=120)
     ROTATE_USE_CUDA = _bool("rotate_use_cuda")
+    ASPECT_USE_CUDA = _bool("aspect_use_cuda")
     CONVERT_USE_CUDA = _bool("convert_use_cuda")
 
 
