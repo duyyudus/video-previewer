@@ -6,17 +6,18 @@ model loads directory contents lazily, so browsing never blocks the GUI
 thread, and the tree keeps itself current when folders appear or disappear
 on disk. Accepts Move drops of file URLs onto a folder row (see
 ``files_dropped``). Right-click offers pinning a folder to Quick access
-(see ``pin_toggled``).
+(see ``pin_toggled``) and opening it in the OS file manager.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import QDir, QModelIndex, QRectF, Qt, Signal
+from PySide6.QtCore import QDir, QModelIndex, QPoint, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QPalette, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -26,6 +27,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..open_external import open_externally
+
 log = logging.getLogger(__name__)
 
 #: Mirror of VideoGrid._DEBUG_POINTER (VIDEO_PREVIEWER_DEBUG_POINTER=1):
@@ -33,6 +36,12 @@ log = logging.getLogger(__name__)
 #: the platform actually proposed (the macOS multi-URL drag session is a
 #: known liar about this).
 _DEBUG_POINTER = bool(os.environ.get("VIDEO_PREVIEWER_DEBUG_POINTER"))
+
+#: Context-menu label for showing a folder in the OS file manager.
+_OPEN_IN_FILE_MANAGER = {
+    "win32": "Open in Explorer",
+    "darwin": "Open in Finder",
+}.get(sys.platform, "Open in file manager")
 
 
 class FolderSidebar(QTreeView):
@@ -201,16 +210,25 @@ class FolderSidebar(QTreeView):
         self.expand(index)  # opening a folder always ends with children shown
         self.folder_activated.emit(self._fs_model.filePath(index))
 
-    def _show_context_menu(self, pos) -> None:
+    def context_menu_at(self, pos: QPoint) -> QMenu | None:
+        """Menu for a right-click at viewport *pos* (None off a folder row)."""
         index = self.indexAt(pos)
         if not index.isValid() or not self._fs_model.isDir(index):
-            return
+            return None
         path = self._fs_model.filePath(index)
         menu = QMenu(self)
         label = "Unpin from Quick access" if self.is_pinned(path) else "Pin to Quick access"
-        action = menu.addAction(label)
-        if menu.exec(self.viewport().mapToGlobal(pos)) is action:
-            self.pin_toggled.emit(path)
+        pin = menu.addAction(label)
+        pin.triggered.connect(lambda _=False: self.pin_toggled.emit(path))
+        reveal = menu.addAction(_OPEN_IN_FILE_MANAGER)
+        reveal.triggered.connect(lambda _=False: open_externally(path))
+        return menu
+
+    def _show_context_menu(self, pos: QPoint) -> None:
+        menu = self.context_menu_at(pos)
+        if menu is not None:
+            menu.exec(self.viewport().mapToGlobal(pos))
+            menu.deleteLater()
 
     # -- drops from the grid -----------------------------------------------------------
 

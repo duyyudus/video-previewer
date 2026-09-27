@@ -71,6 +71,7 @@ src/video_previewer/
 │   │                  #   highlighting the would-be target (reports to the
 │   │                  #   window; never lets QFileSystemModel move natively);
 │   │                  #   right-click pins/unpins a folder to Quick access
+│   │                  #   or opens it in Explorer / the OS file manager
 │   ├── quick_access.py    # Quick access list above the tree: pinned
 │   │                  #   folders as full paths (QSettings JSON), click loads, drag to
 │   │                  #   reorder, missing folders dimmed + inert

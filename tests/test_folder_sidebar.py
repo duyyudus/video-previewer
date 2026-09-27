@@ -261,3 +261,34 @@ def test_double_click_empty_folder_fails_soft(qapp, cache_dir, tmp_path):
         assert win.model.count() == 0
     finally:
         win.close()
+
+
+def test_context_menu_pins_and_opens_folder(qapp, tmp_path, monkeypatch):
+    import video_previewer.ui.folder_sidebar as sidebar_mod
+
+    root, alpha, _beta = _tree(tmp_path)
+    opened: list[str] = []
+    monkeypatch.setattr(sidebar_mod, "open_externally", opened.append)
+    sidebar = FolderSidebar()
+    sidebar.set_root(root)
+    sidebar.resize(200, 300)
+    sidebar.show()
+    try:
+        assert pump(
+            qapp, lambda: sidebar.visualRect(_index(sidebar, alpha)).height() > 0,
+            timeout=30,
+        )
+        assert sidebar.context_menu_at(sidebar.viewport().rect().bottomRight()) is None
+        pinned: list[str] = []
+        sidebar.pin_toggled.connect(pinned.append)
+        menu = sidebar.context_menu_at(sidebar.visualRect(_index(sidebar, alpha)).center())
+        pin, reveal = menu.actions()
+        assert pin.text() == "Pin to Quick access"
+        assert reveal.text() == sidebar_mod._OPEN_IN_FILE_MANAGER
+        reveal.trigger()
+        pin.trigger()
+        assert [Path(p) for p in opened] == [alpha]
+        assert [Path(p) for p in pinned] == [alpha]
+    finally:
+        sidebar.deleteLater()
+        qapp.processEvents()
