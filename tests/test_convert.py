@@ -103,6 +103,7 @@ def test_build_command_remux(tmp_path):
     assert "-c:s mov_text" in joined
     assert "-movflags +faststart" in joined and cmd[-1].endswith("o.mp4")
     assert "-hwaccel" not in cmd
+    assert "-vf" not in cmd  # a remux never filters
 
 
 def test_build_command_reencode_rate_control(tmp_path):
@@ -112,6 +113,7 @@ def test_build_command_reencode_rate_control(tmp_path):
     joined = " ".join(cmd)
     assert "-hwaccel cuda" in joined and "-b:v 2000000" in joined
     assert "-pix_fmt yuv420p" in joined
+    assert cmd[cmd.index("-vf") + 1] == rotator.EVEN_SIZE  # odd sizes fail 4:2:0
     # Intra/lossless codec: constant quality instead of its huge bitrate.
     cmd = converter.build_command(
         "ffmpeg", src, out, _plan("prores", 150_000_000), "libx264"
@@ -184,6 +186,32 @@ def test_convert_avi_transcodes_pcm_audio(tmp_path):
     out = tmp_path / "o.mp4"
     assert converter.convert_file(src, out, plan, use_cuda=False) == "copy"
     assert _codecs(out) == [("video", "mpeg4"), ("audio", "aac")]
+
+
+def test_probe_sees_cover_art_disposition(tmp_path):
+    # Cover art (WMV/MP4/M4A) is a video stream flagged attached_pic; ffprobe
+    # only reports the flag when asked for the disposition section. A file
+    # whose only "video" is cover art has no video to convert or rotate.
+    clip = make_video(tmp_path / "clip.mp4", seconds=1.0)
+    src = tmp_path / "song.m4a"
+    subprocess.run([
+        config.ffmpeg_path(), "-v", "error", "-y",
+        "-i", str(clip), "-f", "lavfi", "-i", "color=red:s=64x64:d=0.04",
+        "-map", "0:a", "-map", "1:v", "-frames:v", "1", "-c:a", "copy",
+        "-c:v", "mjpeg", "-disposition:v:0", "attached_pic", str(src),
+    ], check=True, capture_output=True, timeout=60)
+    assert converter.probe_plan(src) is None
+    assert rotator.probe_source(src) is None
+
+
+def test_convert_odd_frame_size_reencodes(tmp_path):
+    # H.264 refuses odd dimensions; old WMVs have them. The output is trimmed.
+    src = make_video(tmp_path / "a.mkv", seconds=1.0, width=321, height=241, vcodec="ffv1")
+    plan = converter.probe_plan(src)
+    out = tmp_path / "o.mp4"
+    assert converter.convert_file(src, out, plan, use_cuda=False) in ("libx265", "libx264")
+    info = rotator.probe_source(out)
+    assert (info.display_width, info.display_height) == (320, 240)
 
 
 @pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg not available")

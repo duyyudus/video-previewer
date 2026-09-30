@@ -79,6 +79,9 @@ _ENCODERS: dict[str, tuple[tuple[str, ...], str | None]] = {
     "vp8": (("libvpx",), None),
 }
 MP4_LIKE = frozenset({".mp4", ".m4v", ".mov"})
+#: Trims an odd width/height by one pixel: H.264/HEVC encoders (4:2:0
+#: chroma) refuse to open on odd dimensions, which old WMV/AVI files have.
+EVEN_SIZE = "crop=trunc(iw/2)*2:trunc(ih/2)*2"
 
 
 # -- capability detection ---------------------------------------------------
@@ -141,8 +144,8 @@ def probe_source(path: Path, ffprobe: str | None = None) -> SourceInfo | None:
     cmd = [
         ffprobe, "-v", "error",
         "-show_entries",
-        "stream=index,codec_type,codec_name,bit_rate,width,height,sample_aspect_ratio,"
-        "disposition:stream_tags:stream_side_data=rotation",
+        "stream=index,codec_type,codec_name,bit_rate,width,height,sample_aspect_ratio"
+        ":stream_disposition:stream_tags:stream_side_data=rotation",
         "-show_entries", "format=duration,bit_rate,size",
         "-of", "json", str(path),
     ]
@@ -335,7 +338,7 @@ def build_command(
     cmd += ["-map", "0:V:0", "-map", "0:a?", "-map", "0:s?"]
     if suffix == ".mkv":
         cmd += ["-map", "0:t?"]  # embedded fonts etc.
-    cmd += ["-vf", video_filter]
+    cmd += ["-vf", f"{video_filter},{EVEN_SIZE}"]
     cmd += encoder_args(encoder, bitrate)
     if encoder in ("libx265", "hevc_nvenc") and suffix in MP4_LIKE:
         cmd += ["-tag:v", "hvc1"]  # QuickTime / Apple players need hvc1

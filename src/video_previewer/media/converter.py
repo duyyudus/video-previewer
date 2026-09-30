@@ -35,6 +35,7 @@ from pathlib import Path
 from .. import config
 from .process_flags import WINDOWLESS_CREATION_FLAGS
 from .rotator import (
+    EVEN_SIZE,
     MP4_LIKE,
     RotateCancelledError,
     RotateError,
@@ -131,7 +132,7 @@ def probe_plan(path: Path, ffprobe: str | None = None) -> ConvertPlan | None:
     cmd = [
         ffprobe, "-v", "error",
         "-show_entries",
-        "stream=index,codec_type,codec_name,channels,bit_rate,disposition:stream_tags",
+        "stream=index,codec_type,codec_name,channels,bit_rate:stream_disposition:stream_tags",
         "-of", "json", str(path),
     ]
     try:
@@ -197,6 +198,7 @@ def build_command(
             cmd += ["-bsf:v", "mpeg4_unpack_bframes"]  # DivX packed B-frames
         target = plan.info.vcodec
     else:
+        cmd += ["-vf", EVEN_SIZE]
         cmd += encoder_args(encoder, plan.target_bitrate)
         # The encoder, not the plan: an ffmpeg without x265 falls back to H.264.
         target = "hevc" if encoder in ("libx265", "hevc_nvenc") else "h264"

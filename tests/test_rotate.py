@@ -95,7 +95,7 @@ def test_build_command_copies_audio_and_tags_hevc(tmp_path):
         FFMPEG, src, tmp_path / "o.mp4", RotateDirection.CLOCKWISE.transpose, "hevc_nvenc", 1000
     )
     assert cmd[cmd.index("-hwaccel") + 1] == "cuda"
-    assert cmd[cmd.index("-vf") + 1] == "transpose=1"
+    assert cmd[cmd.index("-vf") + 1] == f"transpose=1,{rotator.EVEN_SIZE}"
     assert cmd[cmd.index("-c:a") + 1] == "copy"
     assert cmd[cmd.index("-tag:v") + 1] == "hvc1"
     cpu = rotator.build_command(

@@ -97,7 +97,7 @@ def test_build_command_uses_ratio_filter_and_cuda(tmp_path):
         AspectRatio(16, 9).video_filter, "h264_nvenc", 1000,
     )
     assert cmd[cmd.index("-hwaccel") + 1] == "cuda"
-    assert cmd[cmd.index("-vf") + 1] == AspectRatio(16, 9).video_filter
+    assert cmd[cmd.index("-vf") + 1] == f"{AspectRatio(16, 9).video_filter},{rotator.EVEN_SIZE}"
     assert cmd[cmd.index("-c:a") + 1] == "copy"
 
 
