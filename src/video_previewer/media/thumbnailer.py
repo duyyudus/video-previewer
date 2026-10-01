@@ -131,6 +131,11 @@ def _extract(ffmpeg: str, video: Path, out: Path, t: float, width: int) -> Extra
             return ExtractOutcome.TRANSIENT
     # ffmpeg ran to completion and refused the file: permanently broken until
     # the file's identity (size/mtime/path) changes.
+    stderr = " | ".join((proc.stderr or "").strip().splitlines()[-5:])
+    log.warning(
+        "ffmpeg exited %s at t=%.3f for %s -> %s: %s",
+        proc.returncode, t, video, tmp, stderr or "(no stderr)",
+    )
     _unlink(tmp)
     return ExtractOutcome.FAILED
 
