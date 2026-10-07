@@ -5,10 +5,11 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, Signal, Slot
+from PySide6.QtCore import QObject, QRunnable, QSettings, QThreadPool, Qt, Signal, Slot
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QLabel,
     QPushButton,
     QTabWidget,
@@ -100,9 +101,15 @@ class SettingsDialog(QDialog):
 
     clear_cache_requested = Signal()
 
-    def __init__(self, cache_directory: Path, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        cache_directory: Path,
+        parent: QWidget | None = None,
+        settings: QSettings | None = None,
+    ) -> None:
         super().__init__(parent)
         self._cache_directory = cache_directory
+        self._settings = settings if settings is not None else QSettings()
         self._size_job: _SizeJob | None = None
         self._size_generation = 0
 
@@ -115,6 +122,7 @@ class SettingsDialog(QDialog):
         tabs = QTabWidget(self)
         tabs.setObjectName("settingsTabs")
         tabs.addTab(self._build_cache_tab(), "Cache")
+        tabs.addTab(self._build_frames_tab(), "Frames")
         layout.addWidget(tabs)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, self)
@@ -148,6 +156,72 @@ class SettingsDialog(QDialog):
         layout.addWidget(self._size_label)
         layout.addStretch(1)
         return tab
+
+    def _build_frames_tab(self) -> QWidget:
+        tab = QWidget(self)
+        layout = QVBoxLayout(tab)
+
+        intro = QLabel(
+            "Extract frames (tile right-click menu) writes each video's "
+            "frames into a <video name>_frames folder in:",
+            tab,
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        self._frames_label = QLabel(tab)
+        self._frames_label.setObjectName("framesPathLabel")
+        self._frames_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self._frames_label.setWordWrap(True)
+        layout.addWidget(self._frames_label)
+
+        choose = QPushButton("Choose Folder…", tab)
+        choose.setObjectName("framesChooseButton")
+        choose.clicked.connect(self._choose_frames_location)
+        layout.addWidget(choose)
+
+        self._frames_reset_btn = QPushButton("Use Video Location", tab)
+        self._frames_reset_btn.setObjectName("framesResetButton")
+        self._frames_reset_btn.clicked.connect(lambda: self.set_frames_location(None))
+        layout.addWidget(self._frames_reset_btn)
+        layout.addStretch(1)
+
+        self._refresh_frames_location()
+        return tab
+
+    def frames_location(self) -> Path | None:
+        """Custom folder for frames folders; None = next to each video."""
+        value = self._settings.value(config.SETTING_FRAMES_DIR)
+        if isinstance(value, str) and value.strip():
+            return Path(value)
+        return None
+
+    def set_frames_location(self, folder: Path | None) -> None:
+        if folder is None:
+            self._settings.remove(config.SETTING_FRAMES_DIR)
+        else:
+            self._settings.setValue(config.SETTING_FRAMES_DIR, str(folder))
+        self._refresh_frames_location()
+
+    def _refresh_frames_location(self) -> None:
+        folder = self.frames_location()
+        self._frames_label.setText(
+            str(folder) if folder is not None
+            else "The same folder as the video (default)"
+        )
+        self._frames_reset_btn.setEnabled(folder is not None)
+
+    @Slot()
+    def _choose_frames_location(self) -> None:
+        current = self.frames_location()
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select a folder for extracted frames",
+            str(current) if current is not None else "",
+        )
+        if folder:
+            self.set_frames_location(Path(folder))
 
     @Slot()
     def _open_cache_location(self) -> None:

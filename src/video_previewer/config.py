@@ -36,6 +36,8 @@ SETTING_QUICK_ACCESS = "quick_access"
 SETTING_QUICK_ACCESS_SPLITTER = "quick_access_splitter_state"
 SETTING_SORT_KEY = "sort_key"
 SETTING_SORT_ORDER = "sort_order"
+# Custom root folder for "Extract frames" output; unset = next to each video.
+SETTING_FRAMES_DIR = "frames_dir"
 
 # --- settings.yml -------------------------------------------------------------
 

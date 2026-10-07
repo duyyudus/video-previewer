@@ -10,7 +10,7 @@ A double-click opens the tile's video with the OS-default player; on empty
 grid space (no video under the pointer) it emits ``open_folder_requested``
 so the window can offer its folder picker. Enter opens the current (selected)
 tile the same way. Right-clicking a tile opens a context menu with actions
-on the selection (rotate, change ratio, convert to MP4).
+on the selection (rotate, change ratio, convert to MP4, extract frames).
 """
 
 from __future__ import annotations
@@ -77,6 +77,9 @@ class VideoGrid(QListView):
     aspect_requested = Signal(object)
     #: Emitted from the tile context menu: convert the selection to MP4.
     convert_requested = Signal()
+    #: Emitted from the tile context menu: extract the selection's frames
+    #: as PNG images.
+    extract_frames_requested = Signal()
     #: A tile drag began with these source paths (before the modal drag
     #: loop runs). The window uses this to reset its "drop handled internally"
     #: latch so it can tell a sidebar drop from a file-manager drop below.
@@ -341,6 +344,10 @@ class VideoGrid(QListView):
             item is not None and not is_mp4_like(item.path)
             for item in (self._model.item_at(i.row()) for i in sel.selectedRows())
         ))
+        extract = menu.addAction("Extract frames")
+        extract.triggered.connect(
+            lambda _=False: self.extract_frames_requested.emit()
+        )
         return menu
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802

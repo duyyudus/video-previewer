@@ -68,6 +68,7 @@ class SourceInfo:
     # None when ffprobe did not report it.
     display_width: int | None = None
     display_height: int | None = None
+    fps: float | None = None  # average frame rate; None when unknown
 
 
 # (CPU candidates in preference order, NVENC encoder or None) per source codec.
@@ -145,6 +146,7 @@ def probe_source(path: Path, ffprobe: str | None = None) -> SourceInfo | None:
         ffprobe, "-v", "error",
         "-show_entries",
         "stream=index,codec_type,codec_name,bit_rate,width,height,sample_aspect_ratio"
+        ",avg_frame_rate,r_frame_rate"
         ":stream_disposition:stream_tags:stream_side_data=rotation",
         "-show_entries", "format=duration,bit_rate,size",
         "-of", "json", str(path),
@@ -177,6 +179,7 @@ def probe_source(path: Path, ffprobe: str | None = None) -> SourceInfo | None:
         video_bitrate=_video_bitrate(video, streams, fmt, duration),
         display_width=width,
         display_height=height,
+        fps=frame_rate(video),
     )
 
 
@@ -204,6 +207,16 @@ def display_size(video: dict) -> tuple[int | None, int | None]:
     if rotation % 180 == 90:  # Python: -90 % 180 == 90 too
         width, height = height, width
     return width, height
+
+
+def frame_rate(video: dict) -> float | None:
+    """Frames per second of *video* (average first; None when unknown)."""
+    for key in ("avg_frame_rate", "r_frame_rate"):
+        num, _, den = str(video.get(key) or "").partition("/")
+        n, d = _to_float(num), _to_float(den) if den else 1.0
+        if n and d and n > 0 and d > 0:
+            return n / d
+    return None
 
 
 def _video_bitrate(

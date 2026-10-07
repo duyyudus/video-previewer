@@ -55,7 +55,7 @@ src/video_previewer/
 │   ├── video_grid.py  # VideoGrid (QListView) + responsive column layout;
 │   │                  #   click/Ctrl/Shift/rubber-band selection, F2 rename,
 │   │                  #   right-click context menu (Rotate, Change ratio,
-│                  #   Convert to MP4);
+│                  #   Convert to MP4, Extract frames);
 │   │                  #   drags the selection out as file URLs — a press on
 │   │                  #   the timeline strip (scrub) or on empty space
 │   │                  #   (rubber band) never becomes a drag
@@ -63,7 +63,8 @@ src/video_previewer/
 │   ├── info_bar.py    # thin bar under the grid: selection count + total
 │   │                  #   size (recomputed once per burst of changes)
 │   ├── rename_dialog.py   # F2 rename: edit the stem, extension fixed
-│   ├── rotate_dialog.py   # rotate + ratio + convert: overwrite-or-backup prompts +
+│   ├── rotate_dialog.py   # rotate + ratio + convert: overwrite-or-backup prompts,
+│   │                  #   extract-frames format + sampling prompt +
 │   │                  #   app-modal progress dialog (closing it cancels)
 │   ├── folder_sidebar.py  # folder tree sidebar (QTreeView + QFileSystemModel);
 │   │                  #   double-click loads a folder, single click never does;
@@ -101,6 +102,13 @@ src/video_previewer/
 │   ├── converter.py   # Convert to MP4: remux when MP4 holds the codecs,
 │   │                  #   else re-encode (NVENC/CUDA first, CPU fallback);
 │   │                  #   reuses rotator's probing/encoder/run helpers
+│   ├── frames.py      # Extract frames: all frames or N per second
+│   │                  #   (every-Nth-frame presets per 24/30 fps
+│   │                  #   family) as PNG / fast PNG / JPEG, asked per
+│   │                  #   run, into
+│   │                  #   <name>_frames/<name>_0001.png (never an
+│   │                  #   existing folder; removed on cancel, frames kept
+│   │                  #   on a mid-run error)
 │   └── seek_bar.py    # SeekBarOverlay timeline bar over the hovered tile
 ├── cache/
 │   ├── database.py    # SQLite (WAL, lock-guarded) — videos + scans tables
@@ -112,6 +120,7 @@ src/video_previewer/
     ├── rotate_worker.py     # RotateJob(EncodeJob): rotation
     ├── aspect_worker.py     # AspectJob(EncodeJob): change ratio
     ├── convert_worker.py    # ConvertJob(EncodeJob): convert to MP4
+    ├── frames_worker.py     # FramesJob(EncodeJob): extract frames
     └── thumbnail_worker.py  # ThumbnailQueue: bounded, deduplicated
                              #   QThreadPool jobs (THUMB_CONCURRENCY)
 
@@ -181,7 +190,9 @@ scripts/render_check.py
   `closeEvent`; the last folder + recursive toggle persist via `QSettings`,
   as do the window geometry, the sidebar toggle, its split width, the Quick
   access pins (`SETTING_QUICK_ACCESS`) and their split height, and the
-  grid's sort key + order (`config.SETTING_SORT_KEY` / `SETTING_SORT_ORDER`).
+  grid's sort key + order (`config.SETTING_SORT_KEY` / `SETTING_SORT_ORDER`),
+  and the custom folder for extracted frames (`SETTING_FRAMES_DIR`, set in
+  the Settings panel's Frames tab; unset = next to each video).
 
 ## Commit messages
 

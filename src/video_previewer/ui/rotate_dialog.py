@@ -1,15 +1,18 @@
-"""Dialogs for the rotate, change-ratio, and convert actions: overwrite
-prompts + modal progress."""
+"""Dialogs for the rotate, change-ratio, convert, and extract-frames
+actions: overwrite / format + sampling prompts + modal progress."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QDialogButtonBox,
+    QFormLayout,
     QLabel,
     QMessageBox,
     QProgressBar,
@@ -19,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from .. import config
 from ..media.aspect import AspectRatio
+from ..media.frames import FOLDER_SUFFIX, SAMPLE_PRESETS, FrameFormat, FrameOptions
 from ..media.rotator import BACKUP_DIR_NAME, RotateDirection
 
 
@@ -91,6 +95,105 @@ def ask_convert_overwrite(
         )
     box.setInformativeText(info)
     return _ask_yes_no_cancel(box, filenames)
+
+
+_FORMAT_HINTS = {
+    FrameFormat.PNG: "lossless, slowest",
+    FrameFormat.PNG_FAST: "lossless, larger files, somewhat faster",
+    FrameFormat.JPEG: "fastest and much smaller, slightly lossy",
+}
+
+
+class FrameOptionsDialog(QDialog):
+    """Image format + frames-per-second sampling for an extraction run.
+
+    Sampling is picked per frame-rate family (the selection may mix them);
+    the last entry of each list keeps every frame. Starts on the
+    :class:`FrameOptions` defaults.
+    """
+
+    def __init__(
+        self,
+        parent: QWidget | None,
+        filenames: Sequence[str],
+        root: Path | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Extract frames")
+        self.setMinimumWidth(420)
+        defaults = FrameOptions()
+        count = len(filenames)
+        what = f'"{filenames[0]}"' if count == 1 else f"{count} selected videos"
+        heading = QLabel(f"Extract frames of {what}:", self)
+        heading.setWordWrap(True)
+
+        self._format = QComboBox(self)
+        self._format.setObjectName("framesFormat")
+        for fmt in FrameFormat:
+            self._format.addItem(f"{fmt.label} — {_FORMAT_HINTS[fmt]}", fmt)
+        self._format.setCurrentIndex(self._format.findData(defaults.fmt))
+
+        form = QFormLayout()
+        form.addRow("Image format:", self._format)
+        self._rates: dict[int, QComboBox] = {}
+        default_rates = {24: defaults.rate_24, 30: defaults.rate_30}
+        for family, rates in SAMPLE_PRESETS.items():
+            combo = QComboBox(self)
+            combo.setObjectName(f"framesRate{family}")
+            for rate in rates:
+                text = (
+                    f"{rate} frames per second (all frames)" if rate == family
+                    else f"{rate} frames per second"
+                )
+                combo.addItem(text, rate)
+            combo.setCurrentIndex(max(0, combo.findData(default_rates[family])))
+            self._rates[family] = combo
+            form.addRow(f"{family} fps videos:", combo)
+
+        where = f"in {root}" if root is not None else "next to each video"
+        note = QLabel(
+            "Other frame rates use the nearer row (25 fps as 24, 60 fps as "
+            f"30).\nThe images go into a <video name>{FOLDER_SUFFIX} folder "
+            f"{where}.",
+            self,
+        )
+        note.setWordWrap(True)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            self,
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Extract")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(heading)
+        layout.addLayout(form)
+        layout.addWidget(note)
+        layout.addWidget(buttons)
+
+    def options(self) -> FrameOptions:
+        return FrameOptions(
+            fmt=self._format.currentData(),
+            rate_24=self._rates[24].currentData(),
+            rate_30=self._rates[30].currentData(),
+        )
+
+
+def ask_frame_options(
+    parent: QWidget, filenames: Sequence[str], root: Path | None = None
+) -> FrameOptions | None:
+    """Format + sampling for the extraction; None: cancel it.
+
+    *root* is the custom output folder (None = next to each video)."""
+    dialog = FrameOptionsDialog(parent, filenames, root)
+    try:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        return dialog.options()
+    finally:
+        dialog.deleteLater()
 
 
 def _ask_yes_no_cancel(box: QMessageBox, filenames: Sequence[str]) -> bool | None:

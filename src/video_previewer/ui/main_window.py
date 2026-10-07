@@ -67,6 +67,7 @@ from ..ui.video_grid import VideoGrid
 from ..workers.aspect_worker import AspectJob, AspectReport, AspectSignals
 from ..workers.convert_worker import ConvertJob, ConvertReport, ConvertSignals
 from ..workers.encode_job import EncodeJob
+from ..workers.frames_worker import FramesJob, FramesReport, FramesSignals
 from ..workers.rotate_worker import RotateJob, RotateReport, RotateSignals
 from ..workers.scanner import ScanResult, ScanSignals, Scanner
 from ..workers.thumbnail_worker import ThumbnailQueue
@@ -119,7 +120,10 @@ class MainWindow(QMainWindow):
         self._grid.aspect_requested.connect(self._change_ratio_selected)
         # Tile context menu -> Convert to MP4: same flow (remux or re-encode).
         self._grid.convert_requested.connect(self._convert_selected)
-        # The one running rotate/ratio/convert job and its progress dialog.
+        # Tile context menu -> Extract frames: image sequences, behind
+        # the same progress dialog (the videos themselves are only read).
+        self._grid.extract_frames_requested.connect(self._extract_frames_selected)
+        # The one running rotate/ratio/convert/extract job and its progress dialog.
         self._encode_job: EncodeJob | None = None
         self._encode_dialog: rotate_dialog.RotateProgressDialog | None = None
         # The sidebar tree is created here too: its double-click loads a
@@ -358,7 +362,7 @@ class MainWindow(QMainWindow):
             self._settings_dialog.raise_()
             self._settings_dialog.activateWindow()
             return
-        dialog = SettingsDialog(config.app_cache_dir(), self)
+        dialog = SettingsDialog(config.app_cache_dir(), self, self._settings)
         dialog.clear_cache_requested.connect(self._clear_cache)
         dialog.destroyed.connect(self._on_settings_dialog_destroyed)
         self._settings_dialog = dialog
@@ -1198,6 +1202,53 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self, config.APP_NAME,
                 "Could not convert:\n" + "\n".join(report.failed),
+            )
+
+    def _frames_root(self) -> Path | None:
+        """Custom folder for frames folders (Settings); None = next to the video."""
+        value = self._settings.value(config.SETTING_FRAMES_DIR)
+        if isinstance(value, str) and value.strip():
+            return Path(value)
+        return None
+
+    def _extract_frames_selected(self) -> None:
+        """Extract the frames of the selected videos as images.
+
+        Asks for the image format (PNG, fast PNG, JPEG) and how many frames
+        per second to keep (all of them, or a preset). Each video gets a
+        ``<name>_frames`` folder next to it, or inside the custom location
+        chosen in Settings. Runs off the GUI thread behind
+        the application-modal progress dialog; closing it cancels and
+        removes the partial folder. The videos are not modified.
+        """
+        items = self._encode_candidates("Extracting frames from")
+        if not items:
+            return
+        root = self._frames_root()
+        options = rotate_dialog.ask_frame_options(
+            self, [item.filename for item in items], root
+        )
+        if options is None:
+            return
+        signals = FramesSignals(self)
+        signals.finished.connect(self._on_frames_finished)
+        job = FramesJob([item.path for item in items], signals, root, options)
+        # No items handed over: the sources stay as they are, so their
+        # queued thumbnails must not be dropped.
+        self._start_encode_job([], job, signals, "Extracting frames")
+
+    def _on_frames_finished(self, report: FramesReport) -> None:
+        if not self._end_encode_job():
+            return
+        log.info(
+            "frame extraction %s: %d extracted, %d failed",
+            "cancelled" if report.cancelled else "finished",
+            len(report.extracted), len(report.failed),
+        )
+        if report.failed:
+            QMessageBox.warning(
+                self, config.APP_NAME,
+                "Could not extract frames from:\n" + "\n".join(report.failed),
             )
 
     def _rename_selected(self) -> None:

@@ -58,6 +58,7 @@ def _clean_settings(qapp):
     s.remove(config.SETTING_QUICK_ACCESS_SPLITTER)
     s.remove(config.SETTING_SORT_KEY)
     s.remove(config.SETTING_SORT_ORDER)
+    s.remove(config.SETTING_FRAMES_DIR)
     yield
     s.sync()
 

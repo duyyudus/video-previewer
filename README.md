@@ -94,6 +94,23 @@ Then click **Open Folder…** and pick a folder with videos.
   `settings.yml`) with automatic CPU fallback. `name.mkv` becomes
   `name.mp4` (or `name (1).mp4` if that is taken) with the date modified
   kept.
+* **Extract frames** — right-click one or more selected tiles → **Extract
+  frames**, then pick how many frames per second to keep — for 24 fps videos
+  2, 4, 6, 12, or 24 (all frames); for 30 fps videos 3, 5, 10, 15, or 30 (all
+  frames); other frame rates use the nearer row (25 fps as 24, 60 fps as 30)
+  — and the image format: **PNG** (lossless, slowest), **PNG
+  (fast)** (lossless, larger files, somewhat faster), or **JPEG** (fastest and
+  much smaller, slightly lossy; `.jpg`). Every kept frame of `name.mkv` is
+  written into a
+  `name_frames` folder next to the video: `name_0001.png`, `name_0002.png`,
+  … (four digits at least; a video with more than 9999 frames simply counts
+  on). An existing folder is never touched — `name_frames (1)` is used
+  instead. To collect all frames folders in one place, open **Settings** →
+  **Frames** → **Choose Folder…**; **Use Video Location** goes back to the
+  default. The videos are only read; cancelling the progress dialog removes
+  the partial folder, while an error part-way keeps the frames already
+  written and tells you where they are. PNG frames are large — a few minutes of 1080p video
+  can take several GB.
 * **Drag to move** — drag one or more selected tiles onto a folder in the
   sidebar (the would-be target folder gets highlighted) to move the files
   there; their cached thumbnails move with them. Dragging onto a

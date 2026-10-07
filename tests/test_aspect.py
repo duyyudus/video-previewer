@@ -175,7 +175,7 @@ def test_context_menu_orders_and_emits_ratio(qapp, cache_dir, tmp_path):
         center = grid.visualRect(win.model.index(0)).center()
         menu = grid.context_menu_at(center)
         top = [a.text() for a in menu.actions()]
-        assert top == ["Rotate", "Change ratio", "Convert to MP4"]
+        assert top == ["Rotate", "Change ratio", "Convert to MP4", "Extract frames"]
         ratio_menu = menu.actions()[1].menu()
         assert [a.text() for a in ratio_menu.actions()] == [
             r.label for r in aspect.PRESETS
