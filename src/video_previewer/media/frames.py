@@ -5,8 +5,8 @@ video, or inside a custom root folder — as ``clip_0001.png``,
 ``clip_0002.png``, … (four digits at least; longer videos simply count on).
 The image format is the caller's pick (:class:`FrameFormat`): PNG, PNG with
 light compression (faster, larger files), or JPEG (fastest, lossy), and so
-is the sampling (:class:`FrameOptions`): every frame, or only some frames
-per second — an evenly spaced "every Nth frame" pick.
+is the sampling (:class:`FrameOptions`): every frame, or a typed number of
+frames per second — an evenly spaced "every Nth frame" pick.
 Each kept frame is written exactly once (no duplicates or drops to fake a
 constant frame rate), with any rotation flag applied, so the images look
 like the video does in a player. The source file is only read.
@@ -58,27 +58,8 @@ class FrameFormat(enum.Enum):
         return []
 
 
-#: Frames kept per second, offered per frame-rate family. The last entry of
-#: each row is the family's own rate: every frame.
-SAMPLE_PRESETS: dict[int, tuple[int, ...]] = {
-    24: (2, 4, 6, 12, 24),
-    30: (3, 5, 10, 15, 30),
-}
-
-
-def fps_family(fps: float | None) -> int:
-    """24 or 30: the preset row a video at *fps* belongs to.
-
-    Whichever has the nearer multiple: 23.976, 25, 48, 50 -> 24;
-    29.97, 59.94, 60, 120 -> 30. An unknown rate counts as 30.
-    """
-    if not fps or fps <= 0:
-        return 30
-
-    def distance(base: int) -> float:
-        return abs(fps - max(1, round(fps / base)) * base)
-
-    return 24 if distance(24) < distance(30) else 30
+#: Assumed when ffprobe reports no frame rate for a video.
+FALLBACK_FPS = 30.0
 
 
 @dataclass(slots=True, frozen=True)
@@ -90,16 +71,19 @@ class FrameOptions:
     """
 
     fmt: FrameFormat = FrameFormat.JPEG
-    rate_24: int = 6   # frames kept per second of a 24 fps-family video
-    rate_30: int = 10  # ... and of a 30 fps-family video
+    #: Frames kept per second of video (0.5 = one every 2 seconds);
+    #: None keeps every frame.
+    rate: float | None = 1.0
 
     def step(self, fps: float | None) -> int:
-        """N of "keep every Nth frame" for a video at *fps* (1 = all)."""
-        family = fps_family(fps)
-        rate = self.rate_24 if family == 24 else self.rate_30
-        if rate >= family:
-            return 1  # the full preset means every frame, whatever the fps
-        return max(1, round((fps or family) / rate))
+        """N of "keep every Nth frame" for a video at *fps* (1 = all).
+
+        Whole frames only, so the real rate is the nearest one the video
+        can give: 5 per second of a 24 fps video keeps every 5th frame.
+        """
+        if self.rate is None or self.rate <= 0:
+            return 1
+        return max(1, round((fps or FALLBACK_FPS) / self.rate))
 
 
 class FramesCancelledError(RotateCancelledError):

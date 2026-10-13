@@ -1215,7 +1215,7 @@ class MainWindow(QMainWindow):
         """Extract the frames of the selected videos as images.
 
         Asks for the image format (PNG, fast PNG, JPEG) and how many frames
-        per second to keep (all of them, or a preset). Each video gets a
+        per second to keep (a typed rate, or all of them). Each video gets a
         ``<name>_frames`` folder next to it, or inside the custom location
         chosen in Settings. Runs off the GUI thread behind
         the application-modal progress dialog; closing it cancels and

@@ -7,7 +7,14 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QPoint
-from PySide6.QtWidgets import QApplication, QComboBox, QLabel, QPushButton
+from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QDoubleSpinBox,
+    QLabel,
+    QPushButton,
+)
 
 from conftest import make_video, pump
 from video_previewer import config
@@ -45,19 +52,21 @@ def test_build_command_names_frames_after_the_video(tmp_path):
     assert "-q:v 2" in " ".join(jpeg) and jpeg[-1].endswith("clip_%04d.jpg")
 
 
-def test_sampling_step_per_frame_rate_family():
-    assert [frames.fps_family(f) for f in (23.976, 24, 25, 48, 50)] == [24] * 5
-    assert [frames.fps_family(f) for f in (29.97, 30, 59.94, 60, 120, None)] == [30] * 6
-    full = FrameOptions(rate_24=24, rate_30=30)
-    assert [full.step(f) for f in (24, 30, 60, None)] == [1, 1, 1, 1]
-    # 24 fps row: 2, 4, 6, 12 per second = every 12th, 6th, 4th, 2nd frame.
-    assert [FrameOptions(rate_24=r).step(24) for r in (2, 4, 6, 12, 24)] == [12, 6, 4, 2, 1]
-    # 30 fps row: 3, 5, 10, 15 per second = every 10th, 6th, 3rd, 2nd frame.
-    assert [FrameOptions(rate_30=r).step(30) for r in (3, 5, 10, 15, 30)] == [10, 6, 3, 2, 1]
-    # Each row only applies to its own family; multiples keep the same rate.
-    opts = FrameOptions(rate_24=6, rate_30=10)
-    assert opts.step(23.976) == 4 and opts.step(25) == 4 and opts.step(48) == 8
-    assert opts.step(29.97) == 3 and opts.step(60) == 6 and opts.step(None) == 3
+def test_sampling_step_from_typed_rate():
+    assert FrameOptions() == FrameOptions(FrameFormat.JPEG, 1.0)
+    every = FrameOptions(rate=None)
+    assert [every.step(f) for f in (24, 30, 60, None)] == [1, 1, 1, 1]
+    # N frames per second = every (fps / N)th frame, whatever the video's rate.
+    assert [FrameOptions(rate=r).step(24) for r in (0.5, 1, 2, 6, 12, 24)] == [
+        48, 24, 12, 4, 2, 1,
+    ]
+    assert [FrameOptions(rate=r).step(30) for r in (0.5, 1, 3, 10, 15, 30)] == [
+        60, 30, 10, 3, 2, 1,
+    ]
+    assert FrameOptions(rate=1).step(59.94) == 60
+    # Rounded to whole frames; never fewer than every frame.
+    assert FrameOptions(rate=5).step(24) == 5 and FrameOptions(rate=120).step(24) == 1
+    assert FrameOptions(rate=10).step(None) == 3  # unknown rate: assume 30 fps
 
 
 def test_build_command_samples_every_nth_frame(tmp_path):
@@ -95,11 +104,23 @@ def test_extract_frames_sampled(tmp_path):
     src = make_video(tmp_path / "clip.mp4", seconds=2.0)  # 24 fps: 48 frames
     info = rotator.probe_source(src)
     assert info.fps == pytest.approx(24)
-    step = FrameOptions(rate_24=6).step(info.fps)
+    step = FrameOptions(rate=6).step(info.fps)
     folder = frames.frames_dir(src)
     assert frames.extract_frames(src, folder, info, FrameFormat.JPEG, step) == 12
     names = sorted(p.name for p in folder.iterdir())
     assert names == [f"clip_{n:04d}.jpg" for n in range(1, 13)]  # no gaps
+
+
+def test_extract_one_frame_per_second(tmp_path):
+    src = make_video(tmp_path / "clip.mp4", seconds=3.0)  # 24 fps: 72 frames
+    info = rotator.probe_source(src)
+    folder = frames.frames_dir(src)
+    step = FrameOptions(rate=1).step(info.fps)
+    assert frames.extract_frames(src, folder, info, FrameFormat.JPEG, step) == 3
+    # Half a frame per second: one image every 2 seconds (frames 0 and 48).
+    folder = frames.frames_dir(src)
+    step = FrameOptions(rate=0.5).step(info.fps)
+    assert frames.extract_frames(src, folder, info, FrameFormat.JPEG, step) == 2
 
 
 def test_extract_frames_formats(tmp_path):
@@ -233,17 +254,22 @@ def test_settings_frames_tab_sets_and_resets_location(
 def test_options_dialog_defaults_and_reports_choices(qapp, tmp_path):
     dialog = rotate_dialog.FrameOptionsDialog(None, ["a.mp4", "b.mkv"], tmp_path)
     try:
-        # Starts on JPEG at 6 (24 fps) / 10 (30 fps) frames per second.
-        assert dialog.options() == FrameOptions(FrameFormat.JPEG, 6, 10)
-        rate_24 = dialog.findChild(QComboBox, "framesRate24")
-        rate_30 = dialog.findChild(QComboBox, "framesRate30")
-        assert [rate_24.itemData(i) for i in range(rate_24.count())] == [2, 4, 6, 12, 24]
-        assert [rate_30.itemData(i) for i in range(rate_30.count())] == [3, 5, 10, 15, 30]
+        # Starts on JPEG at one frame per second.
+        assert dialog.options() == FrameOptions(FrameFormat.JPEG, 1.0)
+        rate = dialog.findChild(QDoubleSpinBox, "framesRate")
+        every = dialog.findChild(QCheckBox, "framesAll")
+        assert rate.isEnabled() and not every.isChecked()
+
         fmt = dialog.findChild(QComboBox, "framesFormat")
         fmt.setCurrentIndex(fmt.findData(FrameFormat.PNG))
-        rate_24.setCurrentIndex(rate_24.findData(24))
-        rate_30.setCurrentIndex(rate_30.findData(15))
-        assert dialog.options() == FrameOptions(FrameFormat.PNG, 24, 15)
+        rate.setValue(0.5)
+        assert dialog.options() == FrameOptions(FrameFormat.PNG, 0.5)
+        rate.setValue(0)  # below the minimum: clamped, never zero
+        assert dialog.options().rate == pytest.approx(0.01)
+
+        every.setChecked(True)
+        assert not rate.isEnabled()
+        assert dialog.options() == FrameOptions(FrameFormat.PNG, None)
     finally:
         dialog.deleteLater()
 
@@ -277,7 +303,7 @@ def test_extract_selection_next_to_videos(qapp, cache_dir, tmp_path, monkeypatch
         assert _extract(win, monkeypatch, None) == [(["a.mp4", "b.mkv"], None)]
         assert win._encode_job is None
 
-        _extract(win, monkeypatch, FrameOptions(FrameFormat.PNG, 24, 30))
+        _extract(win, monkeypatch, FrameOptions(FrameFormat.PNG, None))
         assert win._encode_dialog is not None and win._encode_dialog.isModal()
         assert pump(qapp, lambda: win._encode_job is None, timeout=120)
 
@@ -306,7 +332,7 @@ def test_extract_into_custom_location_and_cancel(
         _open(win, qapp, folder, 1)
 
         # Cancel right away: no partial folder is left behind.
-        options = FrameOptions(FrameFormat.JPEG, rate_24=6)  # every 4th frame
+        options = FrameOptions(FrameFormat.JPEG, rate=6)  # every 4th frame
         assert _extract(win, monkeypatch, options) == [(["a.mp4"], root)]
         dialog = win._encode_dialog
         dialog.close()  # closing the progress dialog cancels

@@ -9,9 +9,11 @@ from pathlib import Path
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QDoubleSpinBox,
     QFormLayout,
     QLabel,
     QMessageBox,
@@ -22,7 +24,7 @@ from PySide6.QtWidgets import (
 
 from .. import config
 from ..media.aspect import AspectRatio
-from ..media.frames import FOLDER_SUFFIX, SAMPLE_PRESETS, FrameFormat, FrameOptions
+from ..media.frames import FOLDER_SUFFIX, FrameFormat, FrameOptions
 from ..media.rotator import BACKUP_DIR_NAME, RotateDirection
 
 
@@ -107,9 +109,9 @@ _FORMAT_HINTS = {
 class FrameOptionsDialog(QDialog):
     """Image format + frames-per-second sampling for an extraction run.
 
-    Sampling is picked per frame-rate family (the selection may mix them);
-    the last entry of each list keeps every frame. Starts on the
-    :class:`FrameOptions` defaults.
+    The rate is typed (fractions allowed: 0.5 = one frame every 2 seconds)
+    unless "every frame" is ticked. Starts on the :class:`FrameOptions`
+    defaults.
     """
 
     def __init__(
@@ -133,28 +135,29 @@ class FrameOptionsDialog(QDialog):
             self._format.addItem(f"{fmt.label} — {_FORMAT_HINTS[fmt]}", fmt)
         self._format.setCurrentIndex(self._format.findData(defaults.fmt))
 
+        self._rate = QDoubleSpinBox(self)
+        self._rate.setObjectName("framesRate")
+        self._rate.setDecimals(2)
+        self._rate.setRange(0.01, 240.0)
+        self._rate.setSingleStep(0.5)
+        self._rate.setValue(defaults.rate if defaults.rate is not None else 1.0)
+        self._all = QCheckBox("Every frame", self)
+        self._all.setObjectName("framesAll")
+        self._all.setChecked(defaults.rate is None)
+        self._all.toggled.connect(self._rate.setDisabled)
+        self._rate.setDisabled(self._all.isChecked())
+
         form = QFormLayout()
         form.addRow("Image format:", self._format)
-        self._rates: dict[int, QComboBox] = {}
-        default_rates = {24: defaults.rate_24, 30: defaults.rate_30}
-        for family, rates in SAMPLE_PRESETS.items():
-            combo = QComboBox(self)
-            combo.setObjectName(f"framesRate{family}")
-            for rate in rates:
-                text = (
-                    f"{rate} frames per second (all frames)" if rate == family
-                    else f"{rate} frames per second"
-                )
-                combo.addItem(text, rate)
-            combo.setCurrentIndex(max(0, combo.findData(default_rates[family])))
-            self._rates[family] = combo
-            form.addRow(f"{family} fps videos:", combo)
+        form.addRow("Frames per second:", self._rate)
+        form.addRow("", self._all)
 
         where = f"in {root}" if root is not None else "next to each video"
         note = QLabel(
-            "Other frame rates use the nearer row (25 fps as 24, 60 fps as "
-            f"30).\nThe images go into a <video name>{FOLDER_SUFFIX} folder "
-            f"{where}.",
+            "0.5 keeps one frame every 2 seconds. Frames are picked at even "
+            "spacing (every Nth frame), so the real rate is the nearest one "
+            "each video can give.\n"
+            f"The images go into a <video name>{FOLDER_SUFFIX} folder {where}.",
             self,
         )
         note.setWordWrap(True)
@@ -176,8 +179,7 @@ class FrameOptionsDialog(QDialog):
     def options(self) -> FrameOptions:
         return FrameOptions(
             fmt=self._format.currentData(),
-            rate_24=self._rates[24].currentData(),
-            rate_30=self._rates[30].currentData(),
+            rate=None if self._all.isChecked() else self._rate.value(),
         )
 
 

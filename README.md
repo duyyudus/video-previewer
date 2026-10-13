@@ -95,9 +95,10 @@ Then click **Open Folder…** and pick a folder with videos.
   `name.mp4` (or `name (1).mp4` if that is taken) with the date modified
   kept.
 * **Extract frames** — right-click one or more selected tiles → **Extract
-  frames**, then pick how many frames per second to keep — for 24 fps videos
-  2, 4, 6, 12, or 24 (all frames); for 30 fps videos 3, 5, 10, 15, or 30 (all
-  frames); other frame rates use the nearer row (25 fps as 24, 60 fps as 30)
+  frames**, then type how many frames per second to keep (default 1; 0.5
+  means one frame every 2 seconds), or tick **Every frame**. Frames are
+  picked at even spacing — every Nth frame — so the real rate is the nearest
+  one the video can give
   — and the image format: **PNG** (lossless, slowest), **PNG
   (fast)** (lossless, larger files, somewhat faster), or **JPEG** (fastest and
   much smaller, slightly lossy; `.jpg`). Every kept frame of `name.mkv` is

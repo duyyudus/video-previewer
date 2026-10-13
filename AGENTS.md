@@ -102,10 +102,9 @@ src/video_previewer/
 │   ├── converter.py   # Convert to MP4: remux when MP4 holds the codecs,
 │   │                  #   else re-encode (NVENC/CUDA first, CPU fallback);
 │   │                  #   reuses rotator's probing/encoder/run helpers
-│   ├── frames.py      # Extract frames: all frames or N per second
-│   │                  #   (every-Nth-frame presets per 24/30 fps
-│   │                  #   family) as PNG / fast PNG / JPEG, asked per
-│   │                  #   run, into
+│   ├── frames.py      # Extract frames: all frames or a typed N per
+│   │                  #   second (kept as every Nth frame) as PNG /
+│   │                  #   fast PNG / JPEG, asked per run, into
 │   │                  #   <name>_frames/<name>_0001.png (never an
 │   │                  #   existing folder; removed on cancel, frames kept
 │   │                  #   on a mid-run error)
